@@ -6,6 +6,14 @@ import { logger } from '../utils/logger.js';
 const require = createRequire(import.meta.url);
 
 /**
+ * Limites strictes de tokens par jour en fonction du statut SaaS (Freemium / Premium)
+ */
+export const SAAS_LIMITS = {
+  FREE: 20000,
+  PREMIUM: 500000
+};
+
+/**
  * Service de base de données relationnelle locale (SQLite) pour la gestion multi-serveur (Multi-tenancy).
  * Tente d'utiliser 'better-sqlite3' si présent, sinon bascule automatiquement sur 'node:sqlite' natif (Node.js 22+).
  */
@@ -65,7 +73,8 @@ class DatabaseService {
         mainChannelId TEXT,
         lastIcebreakerAt DATETIME,
         bot_role TEXT DEFAULT 'member',
-        daily_token_quota INTEGER DEFAULT 50000,
+        is_premium INTEGER DEFAULT 0,
+        daily_token_quota INTEGER DEFAULT 20000,
         tokens_used_today INTEGER DEFAULT 0,
         last_reset_date TEXT,
         daily_tokens_used INTEGER DEFAULT 0,
@@ -88,7 +97,10 @@ class DatabaseService {
       this.db.exec("ALTER TABLE guild_settings ADD COLUMN bot_role TEXT DEFAULT 'member'");
     } catch {}
     try {
-      this.db.exec('ALTER TABLE guild_settings ADD COLUMN daily_token_quota INTEGER DEFAULT 50000');
+      this.db.exec('ALTER TABLE guild_settings ADD COLUMN is_premium INTEGER DEFAULT 0');
+    } catch {}
+    try {
+      this.db.exec('ALTER TABLE guild_settings ADD COLUMN daily_token_quota INTEGER DEFAULT 20000');
     } catch {}
     try {
       this.db.exec('ALTER TABLE guild_settings ADD COLUMN tokens_used_today INTEGER DEFAULT 0');
@@ -101,6 +113,21 @@ class DatabaseService {
     } catch {}
     try {
       this.db.exec('ALTER TABLE guild_settings ADD COLUMN daily_tokens_reset_date TEXT');
+    } catch {}
+
+    // Table des résumés d'activité quotidiens (générés par le microModel pour analytics)
+    const createSummariesTableQuery = `
+      CREATE TABLE IF NOT EXISTS daily_summaries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guildId TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        date TEXT NOT NULL,
+        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+    this.db.exec(createSummariesTableQuery);
+    try {
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_daily_summaries_guild_date ON daily_summaries (guildId, date)');
     } catch {}
   }
 
@@ -136,7 +163,8 @@ class DatabaseService {
       }
 
       const botRole = row.bot_role || 'member';
-      const dailyQuota = Number(row.daily_token_quota ?? 50000);
+      const isPremium = Boolean(row.is_premium === 1 || row.is_premium === true || row.is_premium === '1');
+      const dailyQuota = isPremium ? SAAS_LIMITS.PREMIUM : SAAS_LIMITS.FREE;
       const usedToday = Number(row.tokens_used_today ?? row.daily_tokens_used ?? 0);
       const resetDate = row.last_reset_date || row.daily_tokens_reset_date || null;
 
@@ -149,11 +177,13 @@ class DatabaseService {
         mainChannelId: row.mainChannelId || null,
         lastIcebreakerAt: row.lastIcebreakerAt || null,
         bot_role: botRole,
+        is_premium: isPremium,
         daily_token_quota: dailyQuota,
         tokens_used_today: usedToday,
         last_reset_date: resetDate,
         // Alias rétrocompatibles
         botRole,
+        isPremium,
         dailyTokenQuota: dailyQuota,
         dailyTokensUsed: usedToday,
         dailyTokensResetDate: resetDate,
@@ -178,9 +208,10 @@ class DatabaseService {
       const merged = { ...existing, ...settings };
 
       const botRole = settings.bot_role || settings.botRole || merged.bot_role || 'member';
-      const dailyQuota = settings.daily_token_quota !== undefined
-        ? Number(settings.daily_token_quota)
-        : (settings.dailyTokenQuota !== undefined ? Number(settings.dailyTokenQuota) : (merged.daily_token_quota ?? 50000));
+      const isPremiumVal = (settings.is_premium !== undefined
+        ? settings.is_premium
+        : (settings.isPremium !== undefined ? settings.isPremium : existing.is_premium)) ? 1 : 0;
+      const dailyQuota = isPremiumVal === 1 ? SAAS_LIMITS.PREMIUM : SAAS_LIMITS.FREE;
       const usedToday = settings.tokens_used_today !== undefined
         ? Number(settings.tokens_used_today)
         : (settings.dailyTokensUsed !== undefined ? Number(settings.dailyTokensUsed) : (merged.tokens_used_today ?? 0));
@@ -189,9 +220,9 @@ class DatabaseService {
       const query = `
         INSERT INTO guild_settings (
           guildId, logChannelId, botMode, serverVibe, welcomeChannelId, mainChannelId, lastIcebreakerAt,
-          bot_role, daily_token_quota, tokens_used_today, last_reset_date, daily_tokens_used, daily_tokens_reset_date, updatedAt
+          bot_role, is_premium, daily_token_quota, tokens_used_today, last_reset_date, daily_tokens_used, daily_tokens_reset_date, updatedAt
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(guildId) DO UPDATE SET
           logChannelId = excluded.logChannelId,
           botMode = excluded.botMode,
@@ -200,6 +231,7 @@ class DatabaseService {
           mainChannelId = excluded.mainChannelId,
           lastIcebreakerAt = excluded.lastIcebreakerAt,
           bot_role = excluded.bot_role,
+          is_premium = excluded.is_premium,
           daily_token_quota = excluded.daily_token_quota,
           tokens_used_today = excluded.tokens_used_today,
           last_reset_date = excluded.last_reset_date,
@@ -218,6 +250,7 @@ class DatabaseService {
         merged.mainChannelId || null,
         merged.lastIcebreakerAt || null,
         botRole,
+        isPremiumVal,
         dailyQuota,
         usedToday,
         resetDate,
@@ -225,10 +258,24 @@ class DatabaseService {
         resetDate
       );
 
-      logger.info(`[DATABASE] Paramètres mis à jour pour le serveur ${guildId} (Mode: ${merged.botMode}, Vibe: ${merged.serverVibe}, Rôle: ${botRole}, Quota: ${dailyQuota})`);
+      logger.info(`[DATABASE] Paramètres mis à jour pour le serveur ${guildId} (Mode: ${merged.botMode}, Vibe: ${merged.serverVibe}, Rôle: ${botRole}, Premium: ${Boolean(isPremiumVal)})`);
     } catch (err) {
       logger.error(`[DATABASE] Erreur upsert settings pour guild ${guildId} :`, err);
     }
+  }
+
+  /**
+   * Modifie le statut Premium SaaS d'un serveur (réservé au créateur du bot).
+   * @param {string} guildId
+   * @param {boolean} isPremium
+   * @returns {boolean} Nouveau statut premium
+   */
+  setGuildPremium(guildId, isPremium = true) {
+    if (!this.db || !guildId) return false;
+    this.setGuildSettings(guildId, { is_premium: Boolean(isPremium) });
+    const limit = isPremium ? SAAS_LIMITS.PREMIUM : SAAS_LIMITS.FREE;
+    logger.info(`[SAAS] Serveur ${guildId} : Premium = ${Boolean(isPremium)} (${limit} tokens/jour).`);
+    return Boolean(isPremium);
   }
 
   /**
@@ -273,23 +320,23 @@ class DatabaseService {
 
   /**
    * Vérifie le quota quotidien de tokens d'un serveur (FinOps).
+   * Quota fixe : 20 000 tokens (Gratuit) ou 500 000 tokens (Premium).
    * Réinitialise automatiquement le compteur chaque jour calendaire à minuit.
    * 
    * @param {string} guildId
    * @param {number} estimatedTokens - Estimation du coût de la requête
-   * @param {number} [customMaxQuota] - Quota optionnel (priorité sur la base de données)
-   * @returns {{allowed: boolean, currentUsed: number, remaining: number, maxDaily: number}}
+   * @returns {{allowed: boolean, isPremium: boolean, currentUsed: number, remaining: number, maxDaily: number}}
    */
-  checkTokenQuota(guildId, estimatedTokens = 400, customMaxQuota = null) {
+  checkTokenQuota(guildId, estimatedTokens = 400) {
     if (!this.db || !guildId) {
-      const fallbackMax = customMaxQuota || 50000;
-      return { allowed: true, currentUsed: 0, remaining: fallbackMax, maxDaily: fallbackMax };
+      return { allowed: true, isPremium: false, currentUsed: 0, remaining: SAAS_LIMITS.FREE, maxDaily: SAAS_LIMITS.FREE };
     }
 
     try {
       const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
       const settings = this.getGuildSettings(guildId);
-      const maxDailyTokens = customMaxQuota || settings.daily_token_quota || 50000;
+      const isPremium = settings.is_premium;
+      const maxDailyTokens = isPremium ? SAAS_LIMITS.PREMIUM : SAAS_LIMITS.FREE;
 
       let currentUsed = settings.tokens_used_today || 0;
       let resetDate = settings.last_reset_date;
@@ -309,18 +356,19 @@ class DatabaseService {
       const remaining = Math.max(0, maxDailyTokens - currentUsed);
 
       if (!allowed) {
-        logger.warn(`[TOKEN-QUOTA] Quota quotidien dépassé pour guild ${guildId} : ${currentUsed}/${maxDailyTokens} tokens utilisés.`);
+        logger.warn(`[TOKEN-QUOTA] Quota quotidien dépassé pour guild ${guildId} (${isPremium ? 'Premium' : 'Gratuit'}) : ${currentUsed}/${maxDailyTokens} tokens utilisés.`);
       }
 
       return {
         allowed,
+        isPremium,
         currentUsed,
         remaining,
         maxDaily: maxDailyTokens
       };
     } catch (err) {
       logger.error(`[TOKEN-QUOTA] Erreur vérification quota pour guild ${guildId} :`, err);
-      return { allowed: true, currentUsed: 0, remaining: 50000, maxDaily: 50000 };
+      return { allowed: true, isPremium: false, currentUsed: 0, remaining: SAAS_LIMITS.FREE, maxDaily: SAAS_LIMITS.FREE };
     }
   }
 
@@ -334,15 +382,90 @@ class DatabaseService {
       mainChannelId: null,
       lastIcebreakerAt: null,
       bot_role: 'member', // 'member' | 'moderator' | 'admin'
-      daily_token_quota: 50000,
+      is_premium: false,
+      daily_token_quota: SAAS_LIMITS.FREE,
       tokens_used_today: 0,
       last_reset_date: null,
       // Alias rétrocompatibles
       botRole: 'member',
-      dailyTokenQuota: 50000,
+      isPremium: false,
+      dailyTokenQuota: SAAS_LIMITS.FREE,
       dailyTokensUsed: 0,
       dailyTokensResetDate: null
     };
+  }
+
+  /**
+   * Sauvegarde un résumé quotidien généré par le microModel
+   * @param {string} guildId
+   * @param {string} summary
+   * @param {string} [date] - Format YYYY-MM-DD
+   * @returns {Object|null}
+   */
+  saveDailySummary(guildId, summary, date = new Date().toISOString().slice(0, 10)) {
+    if (!this.db || !guildId || !summary) return null;
+
+    try {
+      const stmt = this.db.prepare(`
+        INSERT INTO daily_summaries (guildId, summary, date)
+        VALUES (?, ?, ?)
+      `);
+      const result = stmt.run(String(guildId), String(summary).trim(), String(date));
+      logger.info(`[DATABASE] Résumé quotidien enregistré pour le serveur ${guildId} (Date: ${date}).`);
+      return result;
+    } catch (err) {
+      logger.error(`[DATABASE] Erreur lors de l'enregistrement du résumé pour guild ${guildId} :`, err);
+      return null;
+    }
+  }
+
+  /**
+   * Récupère les résumés quotidiens des 7 derniers jours pour une guilde
+   * @param {string} guildId
+   * @param {number} [days=7]
+   * @returns {Array<{id: number, guildId: string, summary: string, date: string, createdAt: string}>}
+   */
+  getWeeklySummaries(guildId, days = 7) {
+    if (!this.db || !guildId) return [];
+
+    try {
+      const cutoffDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const stmt = this.db.prepare(`
+        SELECT id, guildId, summary, date, createdAt
+        FROM daily_summaries
+        WHERE guildId = ? AND date >= ?
+        ORDER BY date ASC
+      `);
+      return stmt.all ? stmt.all(String(guildId), cutoffDate) : [];
+    } catch (err) {
+      logger.error(`[DATABASE] Erreur récupération résumés hebdomadaires pour guild ${guildId} :`, err);
+      return [];
+    }
+  }
+
+  /**
+   * Récupère les N derniers résumés d'un serveur
+   * @param {string} guildId
+   * @param {number} [limit=7]
+   * @returns {Array<Object>}
+   */
+  getDailySummaries(guildId, limit = 7) {
+    if (!this.db || !guildId) return [];
+
+    try {
+      const stmt = this.db.prepare(`
+        SELECT id, guildId, summary, date, createdAt
+        FROM daily_summaries
+        WHERE guildId = ?
+        ORDER BY date DESC
+        LIMIT ?
+      `);
+      const rows = stmt.all ? stmt.all(String(guildId), limit) : [];
+      return rows.reverse();
+    } catch (err) {
+      logger.error(`[DATABASE] Erreur récupération récents résumés pour guild ${guildId} :`, err);
+      return [];
+    }
   }
 }
 

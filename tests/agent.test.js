@@ -74,9 +74,11 @@ describe('Suite de tests : Mécanique Agentique & Tools', () => {
     expect(modTools.map(t => t.name)).toContain('delete_message');
 
     const adminTools = getToolsForRole('admin');
-    expect(adminTools).toHaveLength(6);
+    expect(adminTools).toHaveLength(8);
     expect(adminTools.map(t => t.name)).toContain('create_channel');
     expect(adminTools.map(t => t.name)).toContain('delete_channel');
+    expect(adminTools.map(t => t.name)).toContain('search_channels');
+    expect(adminTools.map(t => t.name)).toContain('stage_channel_deletion');
   });
 
   it('getDynamicConciergePrompt doit adapter le system prompt au rôle configuré', () => {

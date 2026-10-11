@@ -51,7 +51,8 @@ export class MockGuild {
     this.channels = {
       cache: {
         get: (channelId) => this.channelsMap.get(channelId),
-        find: (predicate) => Array.from(this.channelsMap.values()).find(predicate)
+        find: (predicate) => Array.from(this.channelsMap.values()).find(predicate),
+        values: () => this.channelsMap.values()
       },
       fetch: vi.fn(async (channelId) => this.channelsMap.get(channelId) || null)
     };
@@ -92,7 +93,8 @@ export class MockClient {
       searchContext: vi.fn().mockResolvedValue([]),
       ingestDocuments: vi.fn().mockResolvedValue({ success: true, count: 1 }),
       recordObservation: vi.fn().mockResolvedValue(true),
-      getObservationLogs: vi.fn().mockResolvedValue([])
+      getObservationLogs: vi.fn().mockResolvedValue([]),
+      getUserFacts: vi.fn().mockResolvedValue([])
     };
     this.databaseService = {
       getGuildSettings: vi.fn().mockReturnValue({

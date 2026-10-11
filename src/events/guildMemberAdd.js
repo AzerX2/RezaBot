@@ -1,7 +1,22 @@
 import { Events } from 'discord.js';
-import { aiService } from '../services/aiService.js';
 import { databaseService } from '../services/databaseService.js';
 import { logger } from '../utils/logger.js';
+
+/**
+ * 10 phrases d'accroche d'accueil stylisées, drôles et variées (Zero Waste FinOps : 0 appel API).
+ */
+export const welcomeMessages = [
+  (mention) => `👋 Bienvenue ${mention} ! Prends un cookie 🍪 et installe-toi confortablement parmi nous.`,
+  (mention) => `🚨 Alerte générale : ${mention} vient d'atterrir sur le serveur ! Faites place à la légende. ✨`,
+  (mention) => `🎉 Un sauvage ${mention} apparaît ! Préparez vos meilleures blagues et votre plus beau café ☕.`,
+  (mention) => `🚀 Bienvenue à bord, ${mention} ! Attache ta ceinture, l'aventure commence maintenant.`,
+  (mention) => `👀 Tiens tiens tiens... C'est ${mention} qui nous rejoint ! On espère que tu as pensé aux pizzas 🍕.`,
+  (mention) => `✨ Nouveau joueur dans la partie : ${mention} rejoint l'arène ! Bienvenue chez toi. 🎮`,
+  (mention) => `🥳 Bienvenue ${mention} ! Ne fais pas attention au bazar, on rangeait juste la table pour toi.`,
+  (mention) => `🔥 Coucou ${mention} ! Content de te voir ici, viens nous dire ce qui t'amène dans le général !`,
+  (mention) => `🌟 Un nouveau membre d'exception repéré : bienvenue ${mention} ! Installe-toi au calme. 🛋️`,
+  (mention) => `💥 Boom ! ${mention} débarque en force. Bienvenue dans la bande, fais comme chez toi ! 🎉`
+];
 
 export default {
   name: Events.GuildMemberAdd,
@@ -34,29 +49,21 @@ export default {
         return;
       }
 
-      const username = member.displayName || member.user.username;
-      logger.info(`[WELCOME] Nouveau membre détecté : ${member.user.tag} (${member.id}). Génération du message IA...`);
+      // 3. Sélection aléatoire d'un message stylisé (Zero Waste : 0 token API)
+      const randomIndex = Math.floor(Math.random() * welcomeMessages.length);
+      const chosenTemplate = welcomeMessages[randomIndex];
+      const memberMention = `<@${member.id}>`;
+      const finalMessage = typeof chosenTemplate === 'function'
+        ? chosenTemplate(memberMention)
+        : String(chosenTemplate).replace(/{mention}/g, memberMention).replace(/{name}/g, member.displayName || member.user.username);
 
-      // 3. Appel de l'IA pour générer un message unique et personnalisé
-      const aiWelcomeText = await aiService.generateWelcomeMessage(username);
-
-      // 4. Construction du message final avec gestion du fallback en cas d'échec ou délai IA
-      let finalMessage;
-      if (aiWelcomeText) {
-        // Message personnalisé issu de l'IA avec mention directe du membre
-        finalMessage = `👋 Bienvenue <@${member.id}> !\n\n${aiWelcomeText}`;
-      } else {
-        // Fallback classique et chaleureux en dur si l'API est indisponible ou trop lente
-        finalMessage = `👋 Bienvenue sur le serveur, <@${member.id}> ! Nous sommes ravis de t'accueillir parmi nous. N'hésite pas à faire un tour sur les règles et à venir discuter dans le général ! 🎉`;
-      }
-
-      // 5. Envoi du message d'accueil dans le salon configuré
+      // 4. Envoi du message d'accueil dans le salon configuré
       await channel.send({
         content: finalMessage,
         allowedMentions: { users: [member.id] }
       });
 
-      logger.info(`[WELCOME] Message d'accueil envoyé avec succès pour ${member.user.tag} (Mode: ${aiWelcomeText ? 'IA' : 'Fallback'}).`);
+      logger.info(`[WELCOME] Message d'accueil envoyé pour ${member.user.tag} (Template #${randomIndex + 1}, 0 token consommé).`);
     } catch (error) {
       logger.error(`[WELCOME] Erreur lors de l'envoi du message de bienvenue pour ${member.user.tag} :`, error);
     }

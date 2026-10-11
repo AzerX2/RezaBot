@@ -1,5 +1,6 @@
 import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
+import { actionTicketManager } from '../services/actionTicketManager.js';
 import { logger } from '../utils/logger.js';
 
 /**
@@ -80,7 +81,7 @@ export const getServerTimeTool = tool(
     name: 'get_server_time',
     description: 'Retourne la date précise, le jour de la semaine et l\'heure exacte actuelle.',
     schema: z.object({
-      timezone: z.string().optional().describe('Le fuseau horaire IANA souhaité, par exemple "Europe/Paris" ou "UTC"')
+      timezone: z.string().nullable().optional().describe('Le fuseau horaire IANA souhaité, par exemple "Europe/Paris" ou "UTC"')
     })
   }
 );
@@ -99,6 +100,11 @@ export function createTimeoutUserTool(discordContext = {}) {
       }
 
       try {
+        // Vérification de la permission Discord native du bot
+        if (guild.members?.me?.permissions && !guild.members.me.permissions.has('ModerateMembers')) {
+          return `Impossible d'appliquer la sanction : le bot ne possède pas la permission Discord native "Exclure temporairement des membres" (ModerateMembers).`;
+        }
+
         const cleanedId = String(userId).replace(/[<@!>]/g, '').trim();
         const member = guild.members?.cache?.get(cleanedId) ||
                        await guild.members?.fetch(cleanedId).catch(() => null);
@@ -108,7 +114,7 @@ export function createTimeoutUserTool(discordContext = {}) {
         }
 
         if (member.moderatable === false) {
-          return `Impossible de sanctionner <@${cleanedId}> : les permissions du bot sont insuffisantes (rôle trop élevé).`;
+          return `Impossible de sanctionner <@${cleanedId}> : les permissions du bot sont insuffisantes (rôle de l'utilisateur supérieur ou égal au rôle du bot).`;
         }
 
         const durationMs = Math.min(Math.max(1, durationMinutes), 40320) * 60 * 1000;
@@ -125,7 +131,7 @@ export function createTimeoutUserTool(discordContext = {}) {
       schema: z.object({
         userId: z.string().describe('ID Discord ou mention de l\'utilisateur à mettre en sourdine (ex: "123456789" ou "<@123456789>")'),
         durationMinutes: z.number().default(10).describe('Durée de l\'exclusion en minutes (ex: 5, 10, 60)'),
-        reason: z.string().optional().describe('Raison ou motif de la sanction')
+        reason: z.string().nullable().optional().describe('Raison ou motif de la sanction')
       })
     }
   );
@@ -133,7 +139,7 @@ export function createTimeoutUserTool(discordContext = {}) {
 
 /**
  * Outil 4 : deleteMessage (Rôle Modérateur & Administrateur)
- * Supprime un message spécifique par son identifiant.
+ * Supprime un message spécifique par son identifiant avec vérification des permissions.
  */
 export function createDeleteMessageTool(discordContext = {}) {
   return tool(
@@ -150,6 +156,11 @@ export function createDeleteMessageTool(discordContext = {}) {
 
         if (!targetChannel || typeof targetChannel.messages?.fetch !== 'function') {
           return `Salon introuvable pour supprimer le message ${messageId}.`;
+        }
+
+        // Vérification de la permission native Discord
+        if (targetChannel.permissionsFor && guild?.members?.me && !targetChannel.permissionsFor(guild.members.me).has('ManageMessages')) {
+          return `Impossible de supprimer le message : le bot n'a pas la permission Discord native "Gérer les messages" (ManageMessages) dans ce salon.`;
         }
 
         const targetMessage = await targetChannel.messages.fetch(messageId).catch(() => null);
@@ -169,8 +180,8 @@ export function createDeleteMessageTool(discordContext = {}) {
       description: 'Supprime un message spécifique par son ID dans un salon textuel Discord.',
       schema: z.object({
         messageId: z.string().describe('ID du message Discord à supprimer'),
-        channelId: z.string().optional().describe('ID du salon où réside le message (optionnel, prend le salon actuel par défaut)'),
-        reason: z.string().optional().describe('Raison de la suppression')
+        channelId: z.string().nullable().optional().describe('ID du salon où réside le message (optionnel, prend le salon actuel par défaut)'),
+        reason: z.string().nullable().optional().describe('Raison de la suppression')
       })
     }
   );
@@ -187,6 +198,11 @@ export function createCreateChannelTool(discordContext = {}) {
       const { guild } = discordContext;
       if (!guild || !guild.channels?.create) {
         return `Simulation : le salon #${name} (type: ${type}) aurait été créé avec succès.`;
+      }
+
+      // Vérification de la permission native Discord
+      if (guild.members?.me?.permissions && !guild.members.me.permissions.has('ManageChannels')) {
+        return `Impossible de créer le salon : le bot ne possède pas la permission Discord native "Gérer les salons" (ManageChannels).`;
       }
 
       try {
@@ -219,15 +235,128 @@ export function createCreateChannelTool(discordContext = {}) {
 
 /**
  * Outil 6 : deleteChannel (Rôle Administrateur uniquement)
- * Supprime un salon existant par son ID ou nom.
+ * Supprime un salon existant par son ID ou nom avec exigence de confirmation explicite.
  */
-export function createDeleteChannelTool(discordContext = {}) {
+/**
+ * Outil 7 : searchChannelsTool (Recherche autonome des salons)
+ * Permet à l'IA de trouver elle-même les IDs des salons par mots-clés sans demander d'ID.
+ */
+export function createSearchChannelsTool(discordContext = {}) {
   return tool(
-    async ({ channelId, reason = 'Suppression demandée à RezaBot' }) => {
-      logger.info(`[TOOL:deleteChannel] Demande de suppression du salon "${channelId}"`);
+    async ({ query = '' }) => {
+      logger.info(`[TOOL:searchChannels] Recherche de salons avec le terme : "${query}"`);
+      const { guild } = discordContext;
+      if (!guild || !guild.channels?.cache) {
+        return JSON.stringify([{ id: 'fake-chan-id', name: query || 'support', type: 'text' }]);
+      }
+
+      const q = String(query).toLowerCase().trim();
+      const rawChannels = typeof guild.channels.cache.values === 'function'
+        ? Array.from(guild.channels.cache.values())
+        : (guild.channelsMap ? Array.from(guild.channelsMap.values()) : Object.values(guild.channels.cache));
+
+      const matched = rawChannels
+        .filter(c => {
+          if (!q) return true;
+          return c.name?.toLowerCase().includes(q) || c.id === q;
+        })
+        .slice(0, 15)
+        .map(c => ({
+          id: c.id,
+          name: c.name,
+          type: typeof c.isTextBased === 'function' && c.isTextBased() ? 'text' : (typeof c.isVoiceBased === 'function' && c.isVoiceBased() ? 'voice' : 'category')
+        }));
+
+      return JSON.stringify(matched);
+    },
+    {
+      name: 'search_channels',
+      description: 'Recherche des salons sur le serveur par mots-clés ou nom (ex: "support", "mooxy-world"). Renvoie une liste au format [{ id, name, type }]. Utilise cet outil pour trouver les IDs des salons toi-même.',
+      schema: z.object({
+        query: z.string().optional().describe('Mot-clé ou nom du salon recherché (ex: "support", "mooxy-world")')
+      })
+    }
+  );
+}
+
+/**
+ * Outil 8 : stageChannelDeletionTool (Préparation de suppression & Ticket d'action)
+ * Met en attente la suppression d'un ou plusieurs salons et génère un ticket pour validation humaine via boutons.
+ */
+export function createStageChannelDeletionTool(discordContext = {}) {
+  return tool(
+    async ({ channelIds, reason = 'Suppression demandée par administrateur' }) => {
+      logger.info(`[TOOL:stageChannelDeletion] Mise en attente de suppression pour les salons :`, channelIds);
+      const { guild } = discordContext;
+
+      const ids = Array.isArray(channelIds) ? channelIds : [channelIds];
+      const resolvedChannels = [];
+
+      for (const rawId of ids) {
+        const cleanId = String(rawId).replace(/[<#>]/g, '').trim();
+        let name = cleanId;
+        let finalId = cleanId;
+
+        if (guild?.channels?.cache) {
+          const chan = guild.channels.cache.get(cleanId) ||
+                       guild.channels.cache.find(c => c.name.toLowerCase() === cleanId.toLowerCase()) ||
+                       await guild.channels.fetch(cleanId).catch(() => null);
+          if (chan) {
+            name = chan.name;
+            finalId = chan.id;
+          }
+        }
+        resolvedChannels.push({ id: finalId, name });
+      }
+
+      if (resolvedChannels.length === 0) {
+        return "Aucun salon valide trouvé à mettre en attente.";
+      }
+
+      // Génération du ticket d'action
+      const ticket = actionTicketManager.createTicket({
+        type: 'delete_channels',
+        channels: resolvedChannels,
+        reason,
+        guildId: guild?.id
+      });
+
+      // Attachement au contexte Discord pour déclencher les boutons dans messageCreate
+      discordContext.pendingAction = ticket;
+
+      return `L'action est mise en attente de confirmation par l'utilisateur.`;
+    },
+    {
+      name: 'stage_channel_deletion',
+      description: 'Met en attente la suppression de salons Discord identifiés par leurs IDs et génère un ticket d\'action pour validation humaine via boutons Discord.',
+      schema: z.object({
+        channelIds: z.array(z.string()).describe('Tableau des IDs des salons à supprimer (obtenus via search_channels)'),
+        reason: z.string().nullable().optional().describe('Raison de la suppression')
+      })
+    }
+  );
+}
+
+export function createDeleteChannelTool(discordContext = {}) {
+  // Démarre la mise en attente pour garantir la validation humaine par défaut
+  const stager = createStageChannelDeletionTool(discordContext);
+  return tool(
+    async ({ channelId, confirmed = false, reason = 'Suppression demandée à RezaBot' }) => {
+      logger.info(`[TOOL:deleteChannel] Demande de suppression du salon "${channelId}" (Confirmé: ${confirmed})`);
       const { guild } = discordContext;
       if (!guild) {
         return `Simulation : le salon "${channelId}" aurait été supprimé avec succès.`;
+      }
+
+      // Si non confirmé ou par défaut, créer un ticket d'action pour boutons
+      if (!confirmed) {
+        await stager.invoke({ channelIds: [channelId], reason });
+        return `Confirmation requise : L'action est mise en attente de confirmation par l'utilisateur.`;
+      }
+
+      // Si formellement confirmé par l'utilisateur
+      if (guild.members?.me?.permissions && !guild.members.me.permissions.has('ManageChannels')) {
+        return `Impossible de supprimer le salon : le bot ne possède pas la permission Discord native "Gérer les salons" (ManageChannels).`;
       }
 
       try {
@@ -250,10 +379,11 @@ export function createDeleteChannelTool(discordContext = {}) {
     },
     {
       name: 'delete_channel',
-      description: 'Supprime un salon sur le serveur Discord si explicitement demandé par l\'administrateur.',
+      description: 'Supprime un salon sur le serveur Discord ou le met en attente de confirmation humaine.',
       schema: z.object({
         channelId: z.string().describe('ID, mention (<#id>) ou nom exact du salon à supprimer'),
-        reason: z.string().optional().describe('Raison de la suppression')
+        confirmed: z.boolean().default(false).describe('Doit être true UNIQUEMENT si l\'utilisateur a explicitement validé'),
+        reason: z.string().nullable().optional().describe('Raison de la suppression')
       })
     }
   );
@@ -264,19 +394,24 @@ export const timeoutUserTool = createTimeoutUserTool();
 export const deleteMessageTool = createDeleteMessageTool();
 export const createChannelTool = createCreateChannelTool();
 export const deleteChannelTool = createDeleteChannelTool();
+export const searchChannelsTool = createSearchChannelsTool();
+export const stageChannelDeletionTool = createStageChannelDeletionTool();
 
 /**
  * Retourne les outils adaptés selon le rôle accordé au bot sur le serveur :
  * - member : recherche web + heure serveur
  * - moderator : + timeoutUser, deleteMessage
- * - admin : + timeoutUser, deleteMessage, createChannel, deleteChannel
+ * - admin : + timeoutUser, deleteMessage, createChannel, searchChannels, stageChannelDeletion, deleteChannel
  * 
  * @param {string} role - 'member' | 'moderator' | 'admin'
  * @param {Object} discordContext - { guild, channel, client }
  * @returns {Array} Liste des outils LangChain
  */
 export function getToolsForRole(role = 'member', discordContext = {}) {
-  const baseTools = [searchWebTool, getServerTimeTool];
+  const baseTools = [
+    searchWebTool,
+    getServerTimeTool
+  ];
 
   if (role === 'moderator') {
     return [
@@ -292,6 +427,8 @@ export function getToolsForRole(role = 'member', discordContext = {}) {
       createTimeoutUserTool(discordContext),
       createDeleteMessageTool(discordContext),
       createCreateChannelTool(discordContext),
+      createSearchChannelsTool(discordContext),
+      createStageChannelDeletionTool(discordContext),
       createDeleteChannelTool(discordContext)
     ];
   }
@@ -303,3 +440,4 @@ export function getToolsForRole(role = 'member', discordContext = {}) {
  * Ensemble des outils par défaut fournis à l'Agent LangChain
  */
 export const conciergeTools = [searchWebTool, getServerTimeTool];
+

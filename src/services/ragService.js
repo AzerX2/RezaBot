@@ -186,6 +186,35 @@ class RAGService {
       return [];
     }
   }
+
+  /**
+   * Récupère les faits mémorisés sur un utilisateur dans ChromaDB avec filtre sur userId et guildId
+   * @param {string} userId - Identifiant Discord de l'utilisateur
+   * @param {string} guildId - Identifiant du serveur
+   * @param {number} limit - Nombre maximal de faits à remonter
+   * @returns {Promise<Array<string>>}
+   */
+  async getUserFacts(userId, guildId, limit = 5) {
+    if (!userId || !guildId) return [];
+
+    try {
+      const vectorStore = await this.getVectorStore();
+      const results = await vectorStore.similaritySearch(
+        "passions jeux métier faits anecdotes profil personnalité",
+        limit,
+        { userId: String(userId) }
+      );
+
+      const facts = results
+        .filter(d => (!d.metadata?.guildId || d.metadata.guildId === String(guildId)) && d.metadata?.type === 'user_fact')
+        .map(d => d.pageContent);
+
+      return facts;
+    } catch (err) {
+      logger.warn(`[RAG-USER-FACTS] Erreur lors de la récupération des faits pour ${userId} :`, err.message);
+      return [];
+    }
+  }
 }
 
 export const ragService = new RAGService();

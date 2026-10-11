@@ -1,5 +1,6 @@
 import { Events, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits } from 'discord.js';
 import { Document } from '@langchain/core/documents';
+import { actionTicketManager } from '../services/actionTicketManager.js';
 import { logger } from '../utils/logger.js';
 
 export default {
@@ -49,11 +50,87 @@ export default {
 };
 
 /**
- * Traite les interactions de boutons de modération et d'apprentissage continu
+ * Traite les interactions de boutons (modération, apprentissage continu et validation agentique)
  * @param {import('discord.js').ButtonInteraction} interaction
  */
 async function handleButtonInteraction(interaction) {
   const { customId } = interaction;
+
+  // =========================================================================
+  // BOUTONS D'ACTION AGENTIQUE (Prompt 11 : Validation Humaine & Suppression)
+  // =========================================================================
+  if (customId.startsWith('confirm_action_') || customId.startsWith('cancel_action_')) {
+    // Vérification stricte des permissions Administrateur
+    const isAdmin = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ||
+                    interaction.member?.permissions?.has(PermissionFlagsBits.Administrator);
+
+    if (!isAdmin) {
+      await interaction.reply({
+        content: '❌ Seul un administrateur du serveur a la permission de valider ou annuler cette action.',
+        ephemeral: true
+      });
+      return;
+    }
+
+    const ticketId = customId.startsWith('confirm_action_')
+      ? customId.replace('confirm_action_', '')
+      : customId.replace('cancel_action_', '');
+
+    const ticket = actionTicketManager.getTicket(ticketId);
+
+    // 1. Bouton Annuler
+    if (customId.startsWith('cancel_action_')) {
+      if (ticket) {
+        actionTicketManager.deleteTicket(ticketId);
+      }
+      await interaction.update({
+        content: '❌ Action annulée',
+        embeds: [],
+        components: []
+      });
+      logger.info(`[AGENTIC-ACTION] Action ${ticketId} annulée par l'administrateur ${interaction.user.tag}`);
+      return;
+    }
+
+    // 2. Bouton Confirmer
+    if (customId.startsWith('confirm_action_')) {
+      if (!ticket) {
+        await interaction.reply({
+          content: '❌ Ce ticket d\'action a expiré ou a déjà été traité.',
+          ephemeral: true
+        });
+        return;
+      }
+
+      // Exécution de la suppression des salons spécifiés dans le ticket
+      if (ticket.channels && Array.isArray(ticket.channels) && interaction.guild) {
+        for (const chanInfo of ticket.channels) {
+          try {
+            const chan = interaction.guild.channels.cache.get(chanInfo.id) ||
+                         interaction.guild.channels.cache.find(c => c.name?.toLowerCase() === chanInfo.name?.toLowerCase()) ||
+                         await interaction.guild.channels.fetch(chanInfo.id).catch(() => null);
+
+            if (chan && typeof chan.delete === 'function') {
+              await chan.delete(ticket.reason || 'Suppression confirmée par administrateur');
+              logger.info(`[AGENTIC-ACTION] Salon #${chanInfo.name} (${chanInfo.id}) supprimé sur ${interaction.guild.name}.`);
+            }
+          } catch (delErr) {
+            logger.error(`[AGENTIC-ACTION] Erreur lors de la suppression du salon #${chanInfo.name} :`, delErr);
+          }
+        }
+      }
+
+      actionTicketManager.deleteTicket(ticketId);
+
+      await interaction.update({
+        content: '✅ Fait !',
+        embeds: [],
+        components: []
+      });
+      logger.info(`[AGENTIC-ACTION] Action ${ticketId} validée et exécutée par ${interaction.user.tag}`);
+      return;
+    }
+  }
 
   // Filtrage des boutons gérés par le module de modération IA
   if (!customId.startsWith('mod_validate_') && !customId.startsWith('mod_false_positive_')) {

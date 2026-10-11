@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { ChatOpenAI } from '@langchain/openai';
 import { createOpenAIToolsAgent, AgentExecutor } from 'langchain/agents';
 import { ChatPromptTemplate, MessagesPlaceholder } from '@langchain/core/prompts';
+import { HumanMessage, AIMessage } from '@langchain/core/messages';
 import { conciergeTools, getToolsForRole } from '../tools/index.js';
 import { cacheService } from './cacheService.js';
 import { config } from '../config.js';
@@ -24,7 +25,8 @@ Règles de communication :
 - Sois concis, clair et adapté au ton d'une communauté Discord (utilise quelques émojis pertinents, du markdown Discord propre : **gras**, listes à puces, \`code\` si pertinent).
 - Base tes réponses en priorité sur le contexte fourni (FAQ, docs internes du serveur).
 - Si le contexte ne contient pas l'information requise, réponds honnêtement que tu ne possèdes pas encore cette donnée dans la mémoire du serveur, sans inventer de fausses règles.
-- Reste toujours respectueux, poli et empathique.`;
+- Reste toujours respectueux, poli et empathique.
+- Utilise l'historique récent de la conversation pour comprendre les références implicites (comme 'il', 'ça', 'le dernier').`;
 
     // Prompt système pour la modération contextuelle invisible
     this.moderationSystemPrompt = `Tu es un filtre de modération contextuelle bienveillant pour une communauté Discord.
@@ -40,7 +42,7 @@ Réponds TOUJOURS au format JSON strict avec la structure suivante :
   "severity": "none" | "low" | "medium" | "high",
   "reason": "Explication brève en français de la dérive observée",
   "friendlyTip": "Court message pédagogique et bienveillant destiné à l'auteur pour l'inviter à apaiser le ton"
-}`;
+} `;
   }
 
   /**
@@ -96,7 +98,7 @@ Réponds TOUJOURS au format JSON strict avec la structure suivante :
     try {
       const response = await this._executeWithRetry(async () => {
         return await this.client.chat.completions.create({
-          model: config.ai.tierEconomy, // Modèle ultra-low-cost pour les tâches de fond
+          model: config.ai.fastModel || 'gpt-5.4-nano', // Modèle Fast (modération en temps réel)
           temperature: 0.1, // Déterministe pour la modération
           max_tokens: config.ai.maxTokensModeration,
           response_format: { type: 'json_object' },
@@ -130,34 +132,41 @@ Réponds TOUJOURS au format JSON strict avec la structure suivante :
    * @param {string} botRole - 'member' | 'moderator' | 'admin'
    * @returns {string}
    */
-  getDynamicConciergePrompt(serverVibe = 'friendly', botRole = 'member') {
+  getDynamicConciergePrompt(serverVibe = 'friendly', botRole = 'member', userFacts = []) {
     let roleSection = '';
     switch (botRole) {
       case 'moderator':
         roleSection = `\n\n[STATUT DU BOT : MODÉRATEUR]
-Tu es garant de la paix. Tu as la capacité d'utiliser des outils (Function Calling) pour agir : timeout_user et delete_message.
-Reste juste, calme, et applique les règles avec fermeté et bienveillance.`;
+Tu es garant de la paix. Tu as la capacité d'utiliser les outils de modération (timeout_user, delete_message) soumis au respect des permissions Discord natives. Reste juste, calme, et applique les règles avec fermeté et bienveillance.`;
         break;
       case 'admin':
         roleSection = `\n\n[STATUT DU BOT : ADMINISTRATEUR]
-Tu es le gérant du serveur. En plus de la modération (timeout_user, delete_message), tu as des outils d'administration comme create_channel et delete_channel que tu peux déclencher de manière autonome si un utilisateur te le demande explicitement.`;
+Tu es le gérant complet du serveur. En plus de la modération, tu possèdes les outils de gestion de salons (create_channel, stage_channel_deletion, search_channels).
+RÈGLE OBLIGATOIRE DE CONFIRMATION : Pour toute suppression de salon, utilise toujours l'outil stage_channel_deletion pour demander la confirmation humaine par boutons interactifs. Ne supprime jamais un salon de façon imprévue.`;
         break;
       case 'member':
       default:
         roleSection = `\n\n[STATUT DU BOT : MEMBRE]
-Tu es un simple membre. Tu discutes, tu es amical, tu n'as aucune autorité. Ignore le spam.`;
+Tu es un simple participant, sans aucune autorité administrative ni de modération. Ton ton est chaleureux et amical. Ignore le spam.`;
         break;
+    }
+
+    let userFactsSection = '';
+    if (userFacts && userFacts.length > 0) {
+      const formattedFacts = Array.isArray(userFacts) ? userFacts.join(', ') : String(userFacts);
+      userFactsSection = `\n\nCe que tu sais sur l'utilisateur actuel : ${formattedFacts}. Utilise ces infos subtilement si pertinent.`;
     }
 
     return `Tu es RezaBot, membre actif et concierge intelligent de ce serveur Discord.
 Le ton et l'ambiance spécifiques de ce serveur sont : "${serverVibe}".
-Adapte ton langage, ton niveau d'humour et tes tournures de phrases en conséquence afin de t'intégrer parfaitement à cette communauté.${roleSection}
+Adapte ton langage, ton niveau d'humour et tes tournures de phrases en conséquence afin de t'intégrer parfaitement à cette communauté.${roleSection}${userFactsSection}
 
 Règles de communication :
 - Sois concis, clair et fidèle au ton du serveur (utilise quelques émojis pertinents, du markdown Discord propre : **gras**, listes à puces, \`code\` si pertinent).
 - Base tes réponses en priorité sur le contexte fourni (FAQ, docs internes du serveur).
 - Si le contexte ne contient pas l'information requise, réponds honnêtement que tu ne possèdes pas encore cette donnée dans la mémoire du serveur, sans inventer de fausses règles.
-- Reste toujours respectueux, poli et empathique.`;
+- Reste toujours respectueux, poli et empathique.
+- Utilise l'historique récent de la conversation pour comprendre les références implicites (comme 'il', 'ça', 'le dernier').`;
   }
 
   /**
@@ -167,15 +176,17 @@ Règles de communication :
    * @param {string} userQuestion - Question de l'utilisateur
    * @param {string} authorName - Pseudo de l'utilisateur Discord
    * @param {Array<string>} contextSnippets - Extraits documentaires issus de la base vectorielle (ChromaDB)
-   * @param {Object} guildContext - Contexte multi-serveur (guildId, serverVibe, bot_role, etc.)
+   * @param {Object} guildContext - Contexte multi-serveur (guildId, serverVibe, bot_role, userFacts, etc.)
    * @param {Object} [discordContext] - Contexte Discord.js { guild, channel, client }
+   * @param {Array<Object>} [conversationHistory] - Historique récent [{ role: 'user' | 'assistant', content, name }]
    * @returns {Promise<string>} Réponse formatée
    */
-  async askConcierge(userQuestion, authorName, contextSnippets = [], guildContext = {}, discordContext = {}) {
+  async askConcierge(userQuestion, authorName, contextSnippets = [], guildContext = {}, discordContext = {}, conversationHistory = []) {
     const guildId = guildContext.guildId || 'global';
     const guildName = guildContext.guildName || 'ce serveur';
     const serverVibe = guildContext.serverVibe || 'friendly';
     const botRole = guildContext.bot_role || guildContext.botRole || 'member';
+    const userFacts = guildContext.userFacts || [];
 
     // =========================================================================
     // FINOPS 1 : VÉRIFICATION DU CACHE SÉMANTIQUE (Similarité > 0.95 = 0 token)
@@ -186,7 +197,7 @@ Règles de communication :
       return cacheResult.response;
     }
 
-    const dynamicPrompt = this.getDynamicConciergePrompt(serverVibe, botRole);
+    const dynamicPrompt = this.getDynamicConciergePrompt(serverVibe, botRole, userFacts);
     const formattedContext = contextSnippets.length > 0
       ? `\n\n--- INFORMATIONS ET FAQ DU SERVEUR [${guildName}] (CONSIGNE RAG) ---\n${contextSnippets.join('\n---\n')}\n--- FIN DU CONTEXTE ---`
       : `\n\n(Aucun document interne trouvé sur ce sujet pour le serveur ${guildName})`;
@@ -195,10 +206,10 @@ Règles de communication :
     const activeTools = getToolsForRole(botRole, discordContext);
 
     try {
-      // 1. Initialisation du modèle ChatOpenAI - Tier Agentic avec limite de tokens stricte
+      // 1. Initialisation du modèle ChatOpenAI - Tier Chat avec limite de tokens stricte
       const llm = new ChatOpenAI({
         apiKey: config.ai.openaiApiKey,
-        model: config.ai.tierAgentic,
+        model: config.ai.chatModel || 'gpt-5.4-mini',
         temperature: 0.7,
         maxTokens: config.ai.maxTokensAgentic
       });
@@ -208,9 +219,18 @@ Règles de communication :
 Tu as à ta disposition des outils (Function Calling) adaptés à ton rôle de "${botRole}".
 Règle : Si le contexte RAG ou tes connaissances suffisent à répondre précisément, réponds directement sans appeler d'outil inutilement.`;
 
-      // 3. Template structuré
+      // Formatage de l'historique conversationnel pour LangChain
+      const historyMessages = (conversationHistory || []).map((msg) => {
+        if (msg.role === 'assistant') {
+          return new AIMessage(msg.content);
+        }
+        return new HumanMessage(msg.name ? `[${msg.name}]: ${msg.content}` : msg.content);
+      });
+
+      // 3. Template structuré avec historique conversationnel
       const promptTemplate = ChatPromptTemplate.fromMessages([
         ['system', systemMessage],
+        new MessagesPlaceholder({ variableName: 'chat_history', optional: true }),
         ['human', '{input}'],
         new MessagesPlaceholder('agent_scratchpad')
       ]);
@@ -231,7 +251,10 @@ Règle : Si le contexte RAG ou tes connaissances suffisent à répondre précis�
       });
 
       const userInput = `L'utilisateur @${authorName} sur le serveur "${guildName}" te demande : "${userQuestion}"`;
-      const result = await executor.invoke({ input: userInput });
+      const result = await executor.invoke({
+        input: userInput,
+        chat_history: historyMessages
+      });
       const finalAnswer = (result.output || '').trim();
 
       // Enregistrement dans le cache sémantique pour les questions futures similaires
@@ -241,20 +264,32 @@ Règle : Si le contexte RAG ou tes connaissances suffisent à répondre précis�
 
       return finalAnswer;
     } catch (agentError) {
+      const isAgentRateLimit = agentError?.status === 429 || agentError?.code === 'rate_limit_exceeded' || agentError?.message?.includes('429');
+      if (isAgentRateLimit) {
+        logger.warn(`[AI-AGENT] Rate limit API détecté sur l'agent (Zero Waste). Retour direct sans appel supplémentaire.`);
+        return "Désolé, je suis temporairement saturé de demandes (Rate Limit API). Réessaie dans un instant !";
+      }
+
       logger.warn(`[AI-AGENT] Échec de l'AgentExecutor (${agentError.message}). Repli vers complétion directe...`);
 
       // Fallback résilient en mode Economy
       try {
+        const historyForFallback = (conversationHistory || []).map((m) => ({
+          role: m.role === 'assistant' ? 'assistant' : 'user',
+          content: m.name && m.role !== 'assistant' ? `[${m.name}]: ${m.content}` : m.content
+        }));
+
         const response = await this._executeWithRetry(async () => {
           return await this.client.chat.completions.create({
-            model: config.ai.tierEconomy,
+            model: config.ai.chatModel || 'gpt-5.4-mini',
             temperature: 0.7,
             max_tokens: config.ai.maxTokensEconomy,
             messages: [
-              { role: 'system', content: dynamicPrompt },
+              { role: 'system', content: `${dynamicPrompt}${formattedContext}` },
+              ...historyForFallback,
               {
                 role: 'user',
-                content: `L'utilisateur @${authorName} sur le serveur "${guildName}" te demande : "${userQuestion}"${formattedContext}`
+                content: `L'utilisateur @${authorName} sur le serveur "${guildName}" te demande : "${userQuestion}"`
               }
             ]
           });
@@ -265,6 +300,10 @@ Règle : Si le contexte RAG ou tes connaissances suffisent à répondre précis�
         return fallbackAnswer;
       } catch (fallbackError) {
         logger.error('[AI-SERVICE] Erreur critique lors de la réponse Concierge :', fallbackError.message);
+        const isRateLimit = fallbackError?.status === 429 || fallbackError?.code === 'rate_limit_exceeded' || fallbackError?.message?.includes('429');
+        if (isRateLimit) {
+          return "Désolé, je suis temporairement saturé de demandes (Rate Limit API). Réessaie dans un instant !";
+        }
         return "Désolé, je rencontre actuellement une difficulté technique avec mon service d'intelligence artificielle. Réessaie dans un instant !";
       }
     }
@@ -291,7 +330,7 @@ Règle : Si le contexte RAG ou tes connaissances suffisent à répondre précis�
     try {
       const response = await this._executeWithRetry(async () => {
         return await this.client.chat.completions.create({
-          model: config.ai.tierEconomy, // Tier Economy pour l'analyse d'observation
+          model: config.ai.fastModel || 'gpt-5.4-nano', // Modèle Fast pour l'analyse d'ambiance
           temperature: 0.3,
           max_tokens: config.ai.maxTokensEconomy,
           response_format: { type: 'json_object' },
@@ -348,7 +387,7 @@ Réponds obligatoirement au format JSON strict :
     try {
       const response = await this._executeWithRetry(async () => {
         return await this.client.chat.completions.create({
-          model: config.ai.tierEconomy, // Tier Economy pour la synthèse de salon
+          model: config.ai.microModel || config.ai.fastModel || 'gpt-4.1-nano', // Modèle Micro pour la synthèse TL;DR
           temperature: 0.3,
           max_tokens: config.ai.maxTokensEconomy,
           messages: [
@@ -478,6 +517,94 @@ RÈGLES CRUCIALES :
     } catch (err) {
       logger.error(`[AI-SERVICE] Erreur lors de la génération de l'icebreaker pour guild ${guildId} :`, err);
       return "Au fait, vous travaillez ou vous jouez sur quoi de beau en ce moment ? J'ai envie de découvrir vos projets récents ! 👀";
+    }
+  }
+
+  /**
+   * Génère une intervention spontanée ultra-naturelle dans la discussion
+   * sans politesse ni salutations formelles.
+   * Utilise le modèle ultra-économique (gpt-4o-mini).
+   * 
+   * @param {Array<Object|string>} messagesContext - Les 10 derniers messages du salon
+   * @param {Object} [guildContext] - Contexte du serveur
+   * @returns {Promise<string|null>}
+   */
+  async spontaneousReply(messagesContext = [], guildContext = {}) {
+    if (!messagesContext || messagesContext.length === 0) return null;
+
+    const systemPrompt = `Tu interviens de manière spontanée dans cette discussion. Règle absolue : adopte EXACTEMENT le même ton, le même niveau de langage (argot, second degré) et la même longueur que les derniers messages. Ne sois pas poli, ne dis pas bonjour, réagis simplement comme un membre normal qui donne son avis ou fait une blague.`;
+
+    const formattedDiscussion = messagesContext.map((msg) => {
+      if (typeof msg === 'string') return msg;
+      const authorName = msg.name || msg.member?.displayName || msg.author?.username || (msg.role === 'assistant' ? 'RezaBot' : 'Membre');
+      const text = msg.content || '';
+      return `${authorName}: ${text}`;
+    }).join('\n');
+
+    try {
+      const response = await this._executeWithRetry(async () => {
+        return await this.client.chat.completions.create({
+          model: config.ai.fastModel || 'gpt-5.4-nano',
+          temperature: 0.8,
+          max_tokens: config.ai.maxTokensEconomy || 250,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            {
+              role: 'user',
+              content: `Derniers messages dans le salon :\n\n${formattedDiscussion}\n\nDonne ta réaction spontanée (très courte et naturelle) :`
+            }
+          ]
+        });
+      });
+
+      const reply = response.choices[0]?.message?.content?.trim();
+      return reply || null;
+    } catch (err) {
+      logger.error('[AI-SERVICE] Erreur lors de l\'intervention spontanée :', err.message);
+      return null;
+    }
+  }
+
+  /**
+   * Compresse un historique de discussion via le modèle Micro (ETL / Zero Waste)
+   * afin de réduire drastiquement la taille du prompt envoyé au modèle Chat.
+   * 
+   * @param {Array<Object|string>} messages - Liste des messages à résumer
+   * @returns {Promise<string>} Résumé dense des faits, entités et intentions
+   */
+  async compressContext(messages = []) {
+    if (!messages || messages.length === 0) return '';
+
+    const formattedHistory = messages.map((msg) => {
+      if (typeof msg === 'string') return msg;
+      const author = msg.name || (msg.role === 'assistant' ? 'RezaBot' : 'Membre');
+      return `${author}: ${msg.content || ''}`;
+    }).filter(line => line && line.trim()).join('\n');
+
+    if (!formattedHistory.trim()) return '';
+
+    const systemPrompt = "Tu es un compresseur de texte. Résume cet historique de discussion en gardant uniquement les faits, les entités (noms, projets) et l'intention, en un minimum de mots. Ignore les formules de politesse.";
+
+    try {
+      const response = await this._executeWithRetry(async () => {
+        return await this.client.chat.completions.create({
+          model: config.ai.microModel || 'gpt-4.1-nano',
+          temperature: 0.2,
+          max_tokens: config.ai.maxTokensCompression || 150,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            {
+              role: 'user',
+              content: `Historique de discussion :\n\n${formattedHistory}\n\nRésumé ultra-dense :`
+            }
+          ]
+        });
+      });
+
+      return response.choices[0]?.message?.content?.trim() || '';
+    } catch (err) {
+      logger.error('[AI-SERVICE] Erreur lors de la compression de contexte via microModel :', err.message);
+      return '';
     }
   }
 }
