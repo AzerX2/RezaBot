@@ -1,0 +1,72 @@
+[
+  {
+    "id": "rule-respect",
+    "category": "Règles du serveur",
+    "title": "Respect et bienveillance mutuelle",
+    "content": "Le respect mutuel est la règle d'or. Tout harcèlement, insulte gratuite, attaque personnelle, diffamation ou comportement toxique est strictement prohibé. Le second degré est toléré entre amis tant qu'il ne blesse personne.",
+    "tags": ["règles", "respect", "modération", "sécurité"]
+  },
+  {
+    "id": "rule-spam",
+    "category": "Règles du serveur",
+    "title": "Interdiction du spam et de l'auto-promotion non sollicitée",
+    "content": "Le spam textuel, les mentions abusives (@everyone/@here), les floods d'émojis et la publicité non autorisée en salon ou en messages privés (MP) sont interdits. Un salon dédié #partenariats-projets est disponible pour partager vos projets après validation de l'équipe.",
+    "tags": ["règles", "spam", "publicité", "auto-promo"]
+  },
+  {
+    "id": "rule-nsfw",
+    "category": "Règles du serveur",
+    "title": "Contenus explicites ou illégaux (NSFW)",
+    "content": "Tout contenu à caractère pornographique, violent, choquant, haineux ou illégal est rigoureusement interdit sur l'ensemble du serveur, y compris en photo de profil et bannière.",
+    "tags": ["règles", "nsfw", "sécurité", "sanction"]
+  },
+  {
+    "id": "channel-general",
+    "category": "Salons & Organisation",
+    "title": "Salon #général",
+    "content": "Le salon #général est le point de rencontre principal pour discuter de sujets variés dans la bonne humeur. C'est ici que vit le cœur de la communauté.",
+    "tags": ["salons", "général", "discussion"]
+  },
+  {
+    "id": "channel-entraide",
+    "category": "Salons & Organisation",
+    "title": "Salon #aide-et-entraide",
+    "content": "Le salon #aide-et-entraide est dédié au partage de compétences, au dépannage technique (dev, bots, design, matériel) et à la résolution de problèmes entre membres.",
+    "tags": ["salons", "aide", "support", "entraide"]
+  },
+  {
+    "id": "channel-annonces",
+    "category": "Salons & Organisation",
+    "title": "Salon #annonces",
+    "content": "Ce salon est réservé aux communications officielles du staff : mises à jour importantes du serveur, refontes, votes communautaires et événements à venir.",
+    "tags": ["salons", "annonces", "news", "mises à jour"]
+  },
+  {
+    "id": "roles-hierarchy",
+    "category": "Rôles & Permissions",
+    "title": "Structure des rôles",
+    "content": "Les membres disposent du rôle @Membre après validation du règlement. Les contributeurs actifs reçoivent le rôle @VIP. L'équipe d'animation @Staff et les @Modérateurs veillent à la tranquillité et sont supervisés par les @Admins.",
+    "tags": ["rôles", "permissions", "modérateurs", "staff"]
+  },
+  {
+    "id": "bot-rezabot",
+    "category": "Fonctionnalités RezaBot",
+    "title": "Concierge Intelligent & Mémoire IA",
+    "content": "RezaBot est le concierge IA officiel du serveur. Mentionnez-le simplement (@RezaBot) suivi de votre question pour qu'il consulte la base de connaissances du serveur et vous apporte une réponse précise et contextualisée.",
+    "tags": ["bot", "rezabot", "concierge", "questions", "ia"]
+  },
+  {
+    "id": "bot-tldr",
+    "category": "Fonctionnalités RezaBot",
+    "title": "Commande Slash /tldr",
+    "content": "La commande slash /tldr analyse les 100 derniers messages du salon actif et produit une synthèse ultra-rapide en 3 points clés avec le ressenti d'ambiance du salon.",
+    "tags": ["bot", "tldr", "résumé", "slash-command"]
+  },
+  {
+    "id": "bot-moderation",
+    "category": "Fonctionnalités RezaBot",
+    "title": "Modération contextuelle invisible",
+    "content": "RezaBot surveille les messages en temps réel avec un filtre IA contextuel. Il distingue le chambrage amical des agressions réelles. En cas de dérive, il envoie un conseil bienveillant en privé à l'utilisateur et alerte discrètement les modérateurs.",
+    "tags": ["bot", "modération", "sécurité", "bienveillance"]
+  }
+]

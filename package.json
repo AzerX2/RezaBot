@@ -1,0 +1,41 @@
+{
+  "name": "rezabot",
+  "version": "1.0.0",
+  "description": "Next-Gen AI Discord Bot with RAG Memory and Contextual Moderation",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "ingest": "node scripts/ingest.js",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "discord",
+    "discordjs",
+    "bot",
+    "ai",
+    "openai",
+    "rag",
+    "langchain",
+    "moderation"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@langchain/community": "^0.3.32",
+    "@langchain/core": "^0.3.40",
+    "@langchain/openai": "^0.4.4",
+    "better-sqlite3": "^11.8.1",
+    "chromadb": "^1.10.4",
+    "discord.js": "^14.18.0",
+    "dotenv": "^16.4.7",
+    "langchain": "^0.3.19",
+    "node-cron": "^3.0.3",
+    "openai": "^4.86.1",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.9"
+  }
+}

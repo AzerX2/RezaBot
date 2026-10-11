@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: rezabot-chromadb
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # Sauvegarde persistante de la mémoire vectorielle RAG
+      - ./chroma_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rezabot-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - CHROMA_URL=http://chromadb:8000
+    depends_on:
+      - chromadb
+    volumes:
+      # Sauvegarde persistante de la base SQLite (guild_settings, overrides, quotas)
+      - ./data:/app/data
