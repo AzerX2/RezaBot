@@ -51,25 +51,16 @@ export async function loadCommands(client) {
   if (slashCommandsData.length > 0 && config.discord.token && config.discord.clientId) {
     try {
       const rest = new REST().setToken(config.discord.token);
-      logger.info(`[REST] Déploiement de ${slashCommandsData.length} commande(s) Slash...`);
+      logger.info(`[REST] Déploiement global de ${slashCommandsData.length} commande(s) Slash...`);
 
-      if (config.discord.guildId) {
-        // Enregistrement rapide sur le serveur de test
-        await rest.put(
-          Routes.applicationGuildCommands(config.discord.clientId, config.discord.guildId),
-          { body: slashCommandsData }
-        );
-        logger.info(`[REST] Commandes enregistrées sur la guilde de test (${config.discord.guildId}).`);
-      } else {
-        // Enregistrement global
-        await rest.put(
-          Routes.applicationCommands(config.discord.clientId),
-          { body: slashCommandsData }
-        );
-        logger.info('[REST] Commandes enregistrées globalement.');
-      }
+      // Enregistrement global des Slash Commands pour tous les serveurs
+      await rest.put(
+        Routes.applicationCommands(config.discord.clientId),
+        { body: slashCommandsData }
+      );
+      logger.info(`[COMMANDS] Enregistrement global des Slash Commands réussi (${slashCommandsData.length} commandes déployées).`);
     } catch (restErr) {
-      logger.error('[REST] Échec de l\'enregistrement des Slash Commands :', restErr);
+      logger.error('[COMMANDS] Échec de l\'enregistrement global des Slash Commands :', restErr);
     }
   }
 }
