@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 import { ChatOpenAI } from '@langchain/openai';
 import { createOpenAIToolsAgent, AgentExecutor } from 'langchain/agents';
 import { ChatPromptTemplate, MessagesPlaceholder } from '@langchain/core/prompts';
-import { conciergeTools } from '../tools/index.js';
+import { conciergeTools, getToolsForRole } from '../tools/index.js';
 import { cacheService } from './cacheService.js';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
@@ -125,14 +125,33 @@ Réponds TOUJOURS au format JSON strict avec la structure suivante :
   }
 
   /**
-   * Construit le prompt système dynamique intégrant le serverVibe de la base de données
+   * Construit le prompt système dynamique intégrant le serverVibe et le botRole
    * @param {string} serverVibe
+   * @param {string} botRole - 'member' | 'moderator' | 'admin'
    * @returns {string}
    */
-  getDynamicConciergePrompt(serverVibe = 'friendly') {
+  getDynamicConciergePrompt(serverVibe = 'friendly', botRole = 'member') {
+    let roleSection = '';
+    switch (botRole) {
+      case 'moderator':
+        roleSection = `\n\n[STATUT DU BOT : MODÉRATEUR]
+Tu es garant de la paix. Tu as la capacité d'utiliser des outils (Function Calling) pour agir : timeout_user et delete_message.
+Reste juste, calme, et applique les règles avec fermeté et bienveillance.`;
+        break;
+      case 'admin':
+        roleSection = `\n\n[STATUT DU BOT : ADMINISTRATEUR]
+Tu es le gérant du serveur. En plus de la modération (timeout_user, delete_message), tu as des outils d'administration comme create_channel et delete_channel que tu peux déclencher de manière autonome si un utilisateur te le demande explicitement.`;
+        break;
+      case 'member':
+      default:
+        roleSection = `\n\n[STATUT DU BOT : MEMBRE]
+Tu es un simple membre. Tu discutes, tu es amical, tu n'as aucune autorité. Ignore le spam.`;
+        break;
+    }
+
     return `Tu es RezaBot, membre actif et concierge intelligent de ce serveur Discord.
 Le ton et l'ambiance spécifiques de ce serveur sont : "${serverVibe}".
-Adapte ton langage, ton niveau d'humour et tes tournures de phrases en conséquence afin de t'intégrer parfaitement à cette communauté.
+Adapte ton langage, ton niveau d'humour et tes tournures de phrases en conséquence afin de t'intégrer parfaitement à cette communauté.${roleSection}
 
 Règles de communication :
 - Sois concis, clair et fidèle au ton du serveur (utilise quelques émojis pertinents, du markdown Discord propre : **gras**, listes à puces, \`code\` si pertinent).
@@ -142,29 +161,21 @@ Règles de communication :
   }
 
   /**
-   * Répond à une question posée au bot avec injection de contexte RAG (Concierge).
-   * 
-   * @param {string} userQuestion - Question de l'utilisateur
-   * @param {string} authorName - Pseudo de l'utilisateur Discord
-   * @param {Array<string>} contextSnippets - Extraits documentaires issus de la base vectorielle (ChromaDB)
-   * @param {Object} guildContext - Contexte multi-serveur (guildId, serverVibe, etc.)
-   * @returns {Promise<string>} Réponse formatée
-   */
-  /**
    * Répond à une question posée au bot via un Agent LangChain (Function Calling / OpenAI Tools).
-   * L'agent décide dynamiquement s'il doit appeler un outil (Recherche Web, Heure Serveur)
-   * ou formuler sa réponse à partir du contexte RAG interne.
+   * L'agent utilise des outils adaptés à son rôle (Membre, Modérateur ou Administrateur).
    * 
    * @param {string} userQuestion - Question de l'utilisateur
    * @param {string} authorName - Pseudo de l'utilisateur Discord
    * @param {Array<string>} contextSnippets - Extraits documentaires issus de la base vectorielle (ChromaDB)
-   * @param {Object} guildContext - Contexte multi-serveur (guildId, serverVibe, etc.)
+   * @param {Object} guildContext - Contexte multi-serveur (guildId, serverVibe, bot_role, etc.)
+   * @param {Object} [discordContext] - Contexte Discord.js { guild, channel, client }
    * @returns {Promise<string>} Réponse formatée
    */
-  async askConcierge(userQuestion, authorName, contextSnippets = [], guildContext = {}) {
+  async askConcierge(userQuestion, authorName, contextSnippets = [], guildContext = {}, discordContext = {}) {
     const guildId = guildContext.guildId || 'global';
     const guildName = guildContext.guildName || 'ce serveur';
     const serverVibe = guildContext.serverVibe || 'friendly';
+    const botRole = guildContext.bot_role || guildContext.botRole || 'member';
 
     // =========================================================================
     // FINOPS 1 : VÉRIFICATION DU CACHE SÉMANTIQUE (Similarité > 0.95 = 0 token)
@@ -175,10 +186,13 @@ Règles de communication :
       return cacheResult.response;
     }
 
-    const dynamicPrompt = this.getDynamicConciergePrompt(serverVibe);
+    const dynamicPrompt = this.getDynamicConciergePrompt(serverVibe, botRole);
     const formattedContext = contextSnippets.length > 0
       ? `\n\n--- INFORMATIONS ET FAQ DU SERVEUR [${guildName}] (CONSIGNE RAG) ---\n${contextSnippets.join('\n---\n')}\n--- FIN DU CONTEXTE ---`
       : `\n\n(Aucun document interne trouvé sur ce sujet pour le serveur ${guildName})`;
+
+    // Outils adaptés selon le rôle accordé au bot
+    const activeTools = getToolsForRole(botRole, discordContext);
 
     try {
       // 1. Initialisation du modèle ChatOpenAI - Tier Agentic avec limite de tokens stricte
@@ -191,9 +205,7 @@ Règles de communication :
 
       // 2. Instructions système de l'agent
       const systemMessage = `${dynamicPrompt}${formattedContext}
-Tu as à ta disposition des outils (Function Calling) :
-- search_web : pour chercher des informations récentes, faits d'actualité ou définitions si le contexte RAG ne suffit pas.
-- get_server_time : pour donner l'heure exacte et la date.
+Tu as à ta disposition des outils (Function Calling) adaptés à ton rôle de "${botRole}".
 Règle : Si le contexte RAG ou tes connaissances suffisent à répondre précisément, réponds directement sans appeler d'outil inutilement.`;
 
       // 3. Template structuré
@@ -206,14 +218,14 @@ Règle : Si le contexte RAG ou tes connaissances suffisent à répondre précis�
       // 4. Instanciation de l'Agent OpenAI Tools
       const agent = await createOpenAIToolsAgent({
         llm,
-        tools: conciergeTools,
+        tools: activeTools,
         prompt: promptTemplate
       });
 
       // 5. Exécuteur de l'Agent
       const executor = new AgentExecutor({
         agent,
-        tools: conciergeTools,
+        tools: activeTools,
         maxIterations: 3,
         verbose: false
       });

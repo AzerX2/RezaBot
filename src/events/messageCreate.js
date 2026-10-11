@@ -28,7 +28,8 @@ export default {
       guildId,
       guildName,
       botMode: guildSettings.botMode,
-      serverVibe: guildSettings.serverVibe
+      serverVibe: guildSettings.serverVibe,
+      bot_role: guildSettings.bot_role || guildSettings.botRole || 'member'
     };
 
     // =========================================================================
@@ -49,22 +50,26 @@ export default {
     }
 
     const botUser = message.client.user;
-    const isBotMentioned = message.mentions.has(botUser.id) && !message.mentions.everyone;
+    const isBotMentioned = botUser && message.mentions.has(botUser.id) && !message.mentions.everyone;
+    const nameRegex = /\b(reza|rezabot)\b/i;
+    const isNameCalled = nameRegex.test(content);
 
     // =========================================================================
-    // CAS 1 : INTERACTION CONCIERGE (L'utilisateur mentionne le bot)
+    // CAS 1 : INTERACTION CONCIERGE (Mention @RezaBot OU écoute active de son prénom)
     // =========================================================================
-    if (isBotMentioned) {
+    if (isBotMentioned || isNameCalled) {
       try {
         await message.channel.sendTyping();
 
-        // Nettoyage de la mention dans le texte pour ne garder que la question
-        const cleanQuestion = content
-          .replace(new RegExp(`<@!?${botUser.id}>`, 'g'), '')
-          .trim();
+        // Nettoyage de la mention et du prénom dans le texte pour ne garder que la question
+        let cleanQuestion = content;
+        if (botUser) {
+          cleanQuestion = cleanQuestion.replace(new RegExp(`<@!?${botUser.id}>`, 'g'), '');
+        }
+        cleanQuestion = cleanQuestion.replace(/\b(reza|rezabot)\b/gi, '').trim();
 
         if (!cleanQuestion) {
-          await message.reply(`Bonjour ! Tu m'as mentionné sur **${guildName}**, comment puis-je t'aider aujourd'hui ? 😊`);
+          await message.reply(`Bonjour ! Tu m'as appelé sur **${guildName}**, comment puis-je t'aider aujourd'hui ? 😊`);
           return;
         }
 
@@ -73,7 +78,7 @@ export default {
         // =====================================================================
         const quotaCheck = databaseService.checkTokenQuota(guildId, 450);
         if (!quotaCheck.allowed) {
-          await message.reply("Je me repose un peu pour aujourd'hui, on reprend demain ! 😴");
+          await message.reply("J'ai épuisé mon énergie pour aujourd'hui sur ce serveur, à demain ! ⚡");
           return;
         }
 
@@ -87,17 +92,25 @@ export default {
           }
         }
 
+        // Contexte Discord pour les outils fonctionnels (modération, admin)
+        const discordContext = {
+          guild: message.guild,
+          channel: message.channel,
+          client: message.client
+        };
+
         // Appel Concierge avec cache sémantique, agentique et contexte
         const answer = await aiService.askConcierge(
           cleanQuestion,
           message.member?.displayName || message.author.username,
           ragContext,
-          guildContext
+          guildContext,
+          discordContext
         );
 
         // Décompte FinOps des tokens consommés (~1 token pour 3.5 caractères)
         const estimatedTokens = Math.ceil((cleanQuestion.length + (answer?.length || 0)) / 3.5);
-        databaseService.consumeTokens(guildId, estimatedTokens);
+        databaseService.trackTokenUsage(guildId, estimatedTokens);
 
         await message.reply({
           content: answer,

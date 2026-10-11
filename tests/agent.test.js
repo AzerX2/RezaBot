@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { getServerTimeTool, searchWebTool, conciergeTools } from '../src/tools/index.js';
+import { getServerTimeTool, searchWebTool, conciergeTools, getToolsForRole } from '../src/tools/index.js';
 import { aiService } from '../src/services/aiService.js';
 import { cacheService } from '../src/services/cacheService.js';
 
@@ -61,5 +61,35 @@ describe('Suite de tests : Mécanique Agentique & Tools', () => {
     expect(reply).toBe(expectedAgentReply);
     expect(reply).toContain('14h30');
     expect(conciergeTools.length).toBe(2);
+  });
+
+  it('getToolsForRole doit attribuer les outils selon le niveau d\'autorité (member, moderator, admin)', () => {
+    const memberTools = getToolsForRole('member');
+    expect(memberTools).toHaveLength(2);
+    expect(memberTools.map(t => t.name)).toEqual(['search_web', 'get_server_time']);
+
+    const modTools = getToolsForRole('moderator');
+    expect(modTools).toHaveLength(4);
+    expect(modTools.map(t => t.name)).toContain('timeout_user');
+    expect(modTools.map(t => t.name)).toContain('delete_message');
+
+    const adminTools = getToolsForRole('admin');
+    expect(adminTools).toHaveLength(6);
+    expect(adminTools.map(t => t.name)).toContain('create_channel');
+    expect(adminTools.map(t => t.name)).toContain('delete_channel');
+  });
+
+  it('getDynamicConciergePrompt doit adapter le system prompt au rôle configuré', () => {
+    const memberPrompt = aiService.getDynamicConciergePrompt('chill', 'member');
+    expect(memberPrompt).toContain('[STATUT DU BOT : MEMBRE]');
+    expect(memberPrompt).toContain('aucune autorité');
+
+    const modPrompt = aiService.getDynamicConciergePrompt('gaming', 'moderator');
+    expect(modPrompt).toContain('[STATUT DU BOT : MODÉRATEUR]');
+    expect(modPrompt).toContain('timeout_user');
+
+    const adminPrompt = aiService.getDynamicConciergePrompt('formal', 'admin');
+    expect(adminPrompt).toContain('[STATUT DU BOT : ADMINISTRATEUR]');
+    expect(adminPrompt).toContain('create_channel');
   });
 });

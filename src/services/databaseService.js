@@ -39,6 +39,11 @@ class DatabaseService {
         this.driver = 'node:sqlite';
       }
 
+      try {
+        this.db.exec('PRAGMA journal_mode = WAL;');
+        this.db.exec('PRAGMA busy_timeout = 5000;');
+      } catch {}
+
       this._createTables();
       logger.info(`[DATABASE] Base SQLite initialisée avec succès : ${this.dbPath} (Driver: ${this.driver})`);
     } catch (err) {
@@ -59,6 +64,10 @@ class DatabaseService {
         welcomeChannelId TEXT,
         mainChannelId TEXT,
         lastIcebreakerAt DATETIME,
+        bot_role TEXT DEFAULT 'member',
+        daily_token_quota INTEGER DEFAULT 50000,
+        tokens_used_today INTEGER DEFAULT 0,
+        last_reset_date TEXT,
         daily_tokens_used INTEGER DEFAULT 0,
         daily_tokens_reset_date TEXT,
         createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -74,6 +83,18 @@ class DatabaseService {
     } catch {}
     try {
       this.db.exec('ALTER TABLE guild_settings ADD COLUMN lastIcebreakerAt DATETIME');
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE guild_settings ADD COLUMN bot_role TEXT DEFAULT 'member'");
+    } catch {}
+    try {
+      this.db.exec('ALTER TABLE guild_settings ADD COLUMN daily_token_quota INTEGER DEFAULT 50000');
+    } catch {}
+    try {
+      this.db.exec('ALTER TABLE guild_settings ADD COLUMN tokens_used_today INTEGER DEFAULT 0');
+    } catch {}
+    try {
+      this.db.exec('ALTER TABLE guild_settings ADD COLUMN last_reset_date TEXT');
     } catch {}
     try {
       this.db.exec('ALTER TABLE guild_settings ADD COLUMN daily_tokens_used INTEGER DEFAULT 0');
@@ -114,6 +135,11 @@ class DatabaseService {
         return this._getDefaultSettings(guildId);
       }
 
+      const botRole = row.bot_role || 'member';
+      const dailyQuota = Number(row.daily_token_quota ?? 50000);
+      const usedToday = Number(row.tokens_used_today ?? row.daily_tokens_used ?? 0);
+      const resetDate = row.last_reset_date || row.daily_tokens_reset_date || null;
+
       return {
         guildId: row.guildId,
         logChannelId: row.logChannelId || null,
@@ -122,8 +148,15 @@ class DatabaseService {
         welcomeChannelId: row.welcomeChannelId || null,
         mainChannelId: row.mainChannelId || null,
         lastIcebreakerAt: row.lastIcebreakerAt || null,
-        dailyTokensUsed: Number(row.daily_tokens_used || 0),
-        dailyTokensResetDate: row.daily_tokens_reset_date || null,
+        bot_role: botRole,
+        daily_token_quota: dailyQuota,
+        tokens_used_today: usedToday,
+        last_reset_date: resetDate,
+        // Alias rétrocompatibles
+        botRole,
+        dailyTokenQuota: dailyQuota,
+        dailyTokensUsed: usedToday,
+        dailyTokensResetDate: resetDate,
         updatedAt: row.updatedAt
       };
     } catch (err) {
@@ -144,9 +177,21 @@ class DatabaseService {
       const existing = this.getGuildSettings(guildId);
       const merged = { ...existing, ...settings };
 
+      const botRole = settings.bot_role || settings.botRole || merged.bot_role || 'member';
+      const dailyQuota = settings.daily_token_quota !== undefined
+        ? Number(settings.daily_token_quota)
+        : (settings.dailyTokenQuota !== undefined ? Number(settings.dailyTokenQuota) : (merged.daily_token_quota ?? 50000));
+      const usedToday = settings.tokens_used_today !== undefined
+        ? Number(settings.tokens_used_today)
+        : (settings.dailyTokensUsed !== undefined ? Number(settings.dailyTokensUsed) : (merged.tokens_used_today ?? 0));
+      const resetDate = settings.last_reset_date || settings.dailyTokensResetDate || merged.last_reset_date || null;
+
       const query = `
-        INSERT INTO guild_settings (guildId, logChannelId, botMode, serverVibe, welcomeChannelId, mainChannelId, lastIcebreakerAt, daily_tokens_used, daily_tokens_reset_date, updatedAt)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        INSERT INTO guild_settings (
+          guildId, logChannelId, botMode, serverVibe, welcomeChannelId, mainChannelId, lastIcebreakerAt,
+          bot_role, daily_token_quota, tokens_used_today, last_reset_date, daily_tokens_used, daily_tokens_reset_date, updatedAt
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(guildId) DO UPDATE SET
           logChannelId = excluded.logChannelId,
           botMode = excluded.botMode,
@@ -154,6 +199,10 @@ class DatabaseService {
           welcomeChannelId = excluded.welcomeChannelId,
           mainChannelId = excluded.mainChannelId,
           lastIcebreakerAt = excluded.lastIcebreakerAt,
+          bot_role = excluded.bot_role,
+          daily_token_quota = excluded.daily_token_quota,
+          tokens_used_today = excluded.tokens_used_today,
+          last_reset_date = excluded.last_reset_date,
           daily_tokens_used = excluded.daily_tokens_used,
           daily_tokens_reset_date = excluded.daily_tokens_reset_date,
           updatedAt = CURRENT_TIMESTAMP
@@ -168,43 +217,91 @@ class DatabaseService {
         merged.welcomeChannelId || null,
         merged.mainChannelId || null,
         merged.lastIcebreakerAt || null,
-        merged.dailyTokensUsed !== undefined ? merged.dailyTokensUsed : (merged.daily_tokens_used || 0),
-        merged.dailyTokensResetDate || merged.daily_tokens_reset_date || null
+        botRole,
+        dailyQuota,
+        usedToday,
+        resetDate,
+        usedToday,
+        resetDate
       );
 
-      logger.info(`[DATABASE] Paramètres mis à jour pour le serveur ${guildId} (Mode: ${merged.botMode}, Vibe: ${merged.serverVibe})`);
+      logger.info(`[DATABASE] Paramètres mis à jour pour le serveur ${guildId} (Mode: ${merged.botMode}, Vibe: ${merged.serverVibe}, Rôle: ${botRole}, Quota: ${dailyQuota})`);
     } catch (err) {
       logger.error(`[DATABASE] Erreur upsert settings pour guild ${guildId} :`, err);
     }
   }
 
   /**
+   * Enregistre et incrémente l'utilisation des tokens pour une guilde après chaque appel API.
+   * Réinitialise automatiquement le compteur chaque jour à minuit.
+   * 
+   * @param {string} guildId
+   * @param {number} amount - Nombre de tokens à ajouter
+   */
+  trackTokenUsage(guildId, amount = 0) {
+    if (!this.db || !guildId || amount <= 0) return;
+
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const settings = this.getGuildSettings(guildId);
+
+      let currentUsed = settings.tokens_used_today || 0;
+      if (settings.last_reset_date !== today) {
+        currentUsed = 0;
+      }
+
+      const updatedTotal = currentUsed + amount;
+      this.setGuildSettings(guildId, {
+        tokens_used_today: updatedTotal,
+        daily_tokens_used: updatedTotal,
+        last_reset_date: today,
+        daily_tokens_reset_date: today
+      });
+
+      logger.debug(`[TOKEN-TRACKER] Guilde ${guildId} : +${amount} tokens (Total jour : ${updatedTotal}/${settings.daily_token_quota}).`);
+    } catch (err) {
+      logger.error(`[TOKEN-TRACKER] Erreur consommation tokens guild ${guildId} :`, err);
+    }
+  }
+
+  /**
+   * Alias rétrocompatible pour tests existants
+   */
+  consumeTokens(guildId, tokensConsumed = 0) {
+    this.trackTokenUsage(guildId, tokensConsumed);
+  }
+
+  /**
    * Vérifie le quota quotidien de tokens d'un serveur (FinOps).
-   * Réinitialise automatiquement le compteur chaque jour calendaire.
+   * Réinitialise automatiquement le compteur chaque jour calendaire à minuit.
    * 
    * @param {string} guildId
    * @param {number} estimatedTokens - Estimation du coût de la requête
-   * @param {number} maxDailyTokens - Quota quotidien maximal (défaut: 50 000)
+   * @param {number} [customMaxQuota] - Quota optionnel (priorité sur la base de données)
    * @returns {{allowed: boolean, currentUsed: number, remaining: number, maxDaily: number}}
    */
-  checkTokenQuota(guildId, estimatedTokens = 400, maxDailyTokens = 50000) {
+  checkTokenQuota(guildId, estimatedTokens = 400, customMaxQuota = null) {
     if (!this.db || !guildId) {
-      return { allowed: true, currentUsed: 0, remaining: maxDailyTokens, maxDaily: maxDailyTokens };
+      const fallbackMax = customMaxQuota || 50000;
+      return { allowed: true, currentUsed: 0, remaining: fallbackMax, maxDaily: fallbackMax };
     }
 
     try {
       const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
       const settings = this.getGuildSettings(guildId);
+      const maxDailyTokens = customMaxQuota || settings.daily_token_quota || 50000;
 
-      let currentUsed = settings.dailyTokensUsed || 0;
-      let resetDate = settings.dailyTokensResetDate;
+      let currentUsed = settings.tokens_used_today || 0;
+      let resetDate = settings.last_reset_date;
 
-      // Réinitialisation automatique si nous avons changé de jour
+      // Réinitialisation automatique si nous avons changé de jour calendaire (minuit)
       if (resetDate !== today) {
         currentUsed = 0;
         this.setGuildSettings(guildId, {
-          dailyTokensUsed: 0,
-          dailyTokensResetDate: today
+          tokens_used_today: 0,
+          daily_tokens_used: 0,
+          last_reset_date: today,
+          daily_tokens_reset_date: today
         });
       }
 
@@ -223,36 +320,7 @@ class DatabaseService {
       };
     } catch (err) {
       logger.error(`[TOKEN-QUOTA] Erreur vérification quota pour guild ${guildId} :`, err);
-      return { allowed: true, currentUsed: 0, remaining: maxDailyTokens, maxDaily: maxDailyTokens };
-    }
-  }
-
-  /**
-   * Incrémente les tokens consommés pour une guilde
-   * @param {string} guildId
-   * @param {number} tokensConsumed
-   */
-  consumeTokens(guildId, tokensConsumed = 0) {
-    if (!this.db || !guildId || tokensConsumed <= 0) return;
-
-    try {
-      const today = new Date().toISOString().slice(0, 10);
-      const settings = this.getGuildSettings(guildId);
-
-      let currentUsed = settings.dailyTokensUsed || 0;
-      if (settings.dailyTokensResetDate !== today) {
-        currentUsed = 0;
-      }
-
-      const updatedTotal = currentUsed + tokensConsumed;
-      this.setGuildSettings(guildId, {
-        dailyTokensUsed: updatedTotal,
-        dailyTokensResetDate: today
-      });
-
-      logger.debug(`[TOKEN-TRACKER] Guilde ${guildId} a consommé ${tokensConsumed} tokens (Total jour : ${updatedTotal}).`);
-    } catch (err) {
-      logger.error(`[TOKEN-TRACKER] Erreur consommation tokens guild ${guildId} :`, err);
+      return { allowed: true, currentUsed: 0, remaining: 50000, maxDaily: 50000 };
     }
   }
 
@@ -265,6 +333,13 @@ class DatabaseService {
       welcomeChannelId: null,
       mainChannelId: null,
       lastIcebreakerAt: null,
+      bot_role: 'member', // 'member' | 'moderator' | 'admin'
+      daily_token_quota: 50000,
+      tokens_used_today: 0,
+      last_reset_date: null,
+      // Alias rétrocompatibles
+      botRole: 'member',
+      dailyTokenQuota: 50000,
       dailyTokensUsed: 0,
       dailyTokensResetDate: null
     };
