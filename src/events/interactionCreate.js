@@ -102,20 +102,38 @@ async function handleButtonInteraction(interaction) {
         return;
       }
 
-      // Exécution de la suppression des salons spécifiés dans le ticket
-      if (ticket.channels && Array.isArray(ticket.channels) && interaction.guild) {
-        for (const chanInfo of ticket.channels) {
-          try {
-            const chan = interaction.guild.channels.cache.get(chanInfo.id) ||
-                         interaction.guild.channels.cache.find(c => c.name?.toLowerCase() === chanInfo.name?.toLowerCase()) ||
-                         await interaction.guild.channels.fetch(chanInfo.id).catch(() => null);
+      // Exécution de l'action selon son type
+      if (ticket.type === 'delete_channels') {
+        if (ticket.channels && Array.isArray(ticket.channels) && interaction.guild) {
+          for (const chanInfo of ticket.channels) {
+            try {
+              const chan = interaction.guild.channels.cache.get(chanInfo.id) ||
+                           interaction.guild.channels.cache.find(c => c.name?.toLowerCase() === chanInfo.name?.toLowerCase()) ||
+                           await interaction.guild.channels.fetch(chanInfo.id).catch(() => null);
 
-            if (chan && typeof chan.delete === 'function') {
-              await chan.delete(ticket.reason || 'Suppression confirmée par administrateur');
-              logger.info(`[AGENTIC-ACTION] Salon #${chanInfo.name} (${chanInfo.id}) supprimé sur ${interaction.guild.name}.`);
+              if (chan && typeof chan.delete === 'function') {
+                await chan.delete(ticket.reason || 'Suppression confirmée par administrateur');
+                logger.info(`[AGENTIC-ACTION] Salon #${chanInfo.name} (${chanInfo.id}) supprimé sur ${interaction.guild.name}.`);
+              }
+            } catch (delErr) {
+              logger.error(`[AGENTIC-ACTION] Erreur lors de la suppression du salon #${chanInfo.name} :`, delErr);
             }
-          } catch (delErr) {
-            logger.error(`[AGENTIC-ACTION] Erreur lors de la suppression du salon #${chanInfo.name} :`, delErr);
+          }
+        }
+      } else if (ticket.type === 'rename_channel') {
+        if (interaction.guild) {
+          try {
+            const targetId = ticket.channelId || ticket.channels?.[0]?.id;
+            const chan = interaction.guild.channels.cache.get(targetId) ||
+                         interaction.guild.channels.cache.find(c => c.name?.toLowerCase() === ticket.channelName?.toLowerCase()) ||
+                         await interaction.guild.channels.fetch(targetId).catch(() => null);
+
+            if (chan && typeof chan.setName === 'function') {
+              await chan.setName(ticket.newName, ticket.reason || 'Renommage confirmé par administrateur');
+              logger.info(`[AGENTIC-ACTION] Salon #${ticket.channelName || targetId} renommé en "${ticket.newName}" sur ${interaction.guild.name}.`);
+            }
+          } catch (renErr) {
+            logger.error(`[AGENTIC-ACTION] Erreur lors du renommage du salon :`, renErr);
           }
         }
       }

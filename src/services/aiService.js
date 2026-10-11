@@ -141,8 +141,8 @@ Tu es garant de la paix. Tu as la capacité d'utiliser les outils de modération
         break;
       case 'admin':
         roleSection = `\n\n[STATUT DU BOT : ADMINISTRATEUR]
-Tu es le gérant complet du serveur. En plus de la modération, tu possèdes les outils de gestion de salons (create_channel, stage_channel_deletion, search_channels).
-RÈGLE OBLIGATOIRE DE CONFIRMATION : Pour toute suppression de salon, utilise toujours l'outil stage_channel_deletion pour demander la confirmation humaine par boutons interactifs. Ne supprime jamais un salon de façon imprévue.`;
+Tu es le gérant complet du serveur. En plus de la modération, tu possèdes les outils atomiques de gestion Discord (searchEntities, createChannel, stageDelete, stageRename, create_channel, stage_channel_deletion, search_channels).
+METHODOLOGIE OBLIGATOIRE : 1. Si l'utilisateur demande une action sur un élément existant, utilise TOUJOURS searchEntities en premier pour trouver l'ID. 2. N'invente jamais d'ID. 3. Une fois l'ID trouvé, utilise l'outil d'action approprié. 4. Si une action nécessite une confirmation, dis à l'utilisateur que tu as préparé l'action et qu'il doit cliquer sur le bouton.`;
         break;
       case 'member':
       default:
@@ -220,6 +220,7 @@ Règles de communication :
       // 2. Instructions système de l'agent
       const systemMessage = `${dynamicPrompt}${formattedContext}
 Tu as à ta disposition des outils (Function Calling) adaptés à ton rôle de "${botRole}".
+METHODOLOGIE OBLIGATOIRE : 1. Si l'utilisateur demande une action sur un élément existant, utilise TOUJOURS searchEntities en premier pour trouver l'ID. 2. N'invente jamais d'ID. 3. Une fois l'ID trouvé, utilise l'outil d'action approprié. 4. Si une action nécessite une confirmation, dis à l'utilisateur que tu as préparé l'action et qu'il doit cliquer sur le bouton.
 Règle : Si le contexte RAG ou tes connaissances suffisent à répondre précisément, réponds directement sans appeler d'outil inutilement.`;
 
       // Formatage de l'historique conversationnel pour LangChain
@@ -250,6 +251,7 @@ Règle : Si le contexte RAG ou tes connaissances suffisent à répondre précis�
         agent,
         tools: activeTools,
         maxIterations: 3,
+        handleParsingErrors: true,
         verbose: false
       });
 
@@ -259,6 +261,13 @@ Règle : Si le contexte RAG ou tes connaissances suffisent à répondre précis�
         chat_history: historyMessages
       });
       const finalAnswer = (result.output || '').trim();
+
+      // Interception gracieuse si l'Agent a retourné une notification d'arrêt sur limite d'itérations
+      const isStoppedOutput = /Agent stopped due to|max iterations|iteration limit/i.test(finalAnswer);
+      if (isStoppedOutput) {
+        logger.warn(`[AI-AGENT] L'agent s'est arrêté en raison de la limite d'itérations. Réponse gracieuse.`);
+        return "Désolé, je me suis un peu emmêlé les pinceaux en cherchant les salons. Tu peux me redonner le nom exact ou le faire manuellement pour cette fois ?";
+      }
 
       // Enregistrement dans le cache sémantique pour les questions futures similaires
       if (finalAnswer) {
@@ -271,6 +280,14 @@ Règle : Si le contexte RAG ou tes connaissances suffisent à répondre précis�
       if (isAgentRateLimit) {
         logger.warn(`[AI-AGENT] Rate limit API détecté sur l'agent (Zero Waste). Retour direct sans appel supplémentaire.`);
         return "Désolé, je suis temporairement saturé de demandes (Rate Limit API). Réessaie dans un instant !";
+      }
+
+      // Interception de l'erreur spécifique de max iterations / limite d'exécution
+      const isMaxIterations = /max iterations|iteration limit|time limit|Agent stopped/i.test(agentError?.message || '') ||
+                              agentError?.name === 'AgentStoppedError';
+      if (isMaxIterations) {
+        logger.warn(`[AI-AGENT] Limite d'itérations atteinte pour l'agent (${agentError.message}). Réponse gracieuse.`);
+        return "Désolé, je me suis un peu emmêlé les pinceaux en cherchant les salons. Tu peux me redonner le nom exact ou le faire manuellement pour cette fois ?";
       }
 
       logger.warn(`[AI-AGENT] Échec de l'AgentExecutor (${agentError.message}). Repli vers complétion directe...`);

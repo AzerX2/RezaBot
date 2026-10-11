@@ -227,16 +227,24 @@ export default {
         // =====================================================================
         // PROMPT 11 : AGENTIC WORKFLOW & BOUTONS DE CONFIRMATION (Validation Humaine)
         // =====================================================================
-        if (discordContext.pendingAction && discordContext.pendingAction.type === 'delete_channels') {
+        if (discordContext.pendingAction) {
           const ticket = discordContext.pendingAction;
-          const channelNames = ticket.channels.map(c => `#${c.name}`).join(', ');
+          let description = `⚠️ Action requise : Confirmation nécessaire pour exécuter cette opération. Es-tu sûr ?`;
+
+          if (ticket.type === 'delete_channels') {
+            const channelNames = (ticket.channels || []).map(c => `#${c.name}`).join(', ');
+            description = `⚠️ Action requise : Je m'apprête à supprimer les salons : ${channelNames}. Es-tu sûr ?`;
+          } else if (ticket.type === 'rename_channel') {
+            const oldName = ticket.channelName || ticket.channels?.[0]?.name || ticket.channelId;
+            description = `⚠️ Action requise : Je m'apprête à renommer le salon #${oldName} en "${ticket.newName}". Es-tu sûr ?`;
+          }
 
           const confirmEmbed = new EmbedBuilder()
             .setColor(0xED4245)
             .setTitle('⚠️ Action requise')
-            .setDescription(`⚠️ Action requise : Je m'apprête à supprimer les salons : ${channelNames}. Es-tu sûr ?`)
+            .setDescription(description)
             .addFields(
-              { name: 'Motif', value: ticket.reason || 'Suppression demandée', inline: true },
+              { name: 'Motif', value: ticket.reason || 'Action demandée', inline: true },
               { name: 'Demandé par', value: `<@${message.author.id}>`, inline: true }
             )
             .setFooter({ text: 'Validation requise par un administrateur' })

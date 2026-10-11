@@ -1,7 +1,23 @@
 import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
+import { ChannelType } from 'discord.js';
 import { actionTicketManager } from '../services/actionTicketManager.js';
 import { logger } from '../utils/logger.js';
+import { createSearchEntitiesTool, searchEntitiesTool } from './discord/searchEntities.js';
+import { createCreateChannelTool, createChannelTool } from './discord/createChannel.js';
+import { createStageDeleteTool, stageDeleteTool } from './discord/stageDelete.js';
+import { createStageRenameTool, stageRenameTool } from './discord/stageRename.js';
+
+export {
+  createSearchEntitiesTool,
+  searchEntitiesTool,
+  createCreateChannelTool,
+  createChannelTool,
+  createStageDeleteTool,
+  stageDeleteTool,
+  createStageRenameTool,
+  stageRenameTool
+};
 
 /**
  * Outil 1 : searchWebTool
@@ -187,93 +203,99 @@ export function createDeleteMessageTool(discordContext = {}) {
   );
 }
 
-/**
- * Outil 5 : createChannel (Rôle Administrateur uniquement)
- * Crée un nouveau salon sur le serveur Discord.
- */
-export function createCreateChannelTool(discordContext = {}) {
-  return tool(
-    async ({ name, type = 'text', reason = 'Création demandée à RezaBot' }) => {
-      logger.info(`[TOOL:createChannel] Demande de création de salon "${name}" (Type: ${type})`);
-      const { guild } = discordContext;
-      if (!guild || !guild.channels?.create) {
-        return `Simulation : le salon #${name} (type: ${type}) aurait été créé avec succès.`;
-      }
 
-      // Vérification de la permission native Discord
-      if (guild.members?.me?.permissions && !guild.members.me.permissions.has('ManageChannels')) {
-        return `Impossible de créer le salon : le bot ne possède pas la permission Discord native "Gérer les salons" (ManageChannels).`;
-      }
-
-      try {
-        const cleanName = name.toLowerCase().replace(/[\s_]+/g, '-').replace(/[^a-z0-9-]/g, '');
-        const channelType = type === 'voice' ? 2 : 0; // 0 = GuildText, 2 = GuildVoice
-
-        const created = await guild.channels.create({
-          name: cleanName || name,
-          type: channelType,
-          reason
-        });
-
-        return `✅ Le salon <#${created.id}> (#${created.name}) a été créé avec succès sur le serveur. Type : ${type}.`;
-      } catch (err) {
-        logger.error('[TOOL:createChannel] Erreur création salon :', err);
-        return `Échec de la création du salon : ${err.message}`;
-      }
-    },
-    {
-      name: 'create_channel',
-      description: 'Crée un nouveau salon textuel ou vocal sur le serveur Discord si l\'administrateur le demande explicitement.',
-      schema: z.object({
-        name: z.string().describe('Nom du nouveau salon (ex: "annonces-projets", "vocal-chill")'),
-        type: z.enum(['text', 'voice']).nullable().optional().default('text').describe('Type de salon ("text" pour textuel, "voice" pour vocal)'),
-        reason: z.string().nullable().optional().describe('Motif de création')
-      })
-    }
-  );
-}
 
 /**
  * Outil 6 : deleteChannel (Rôle Administrateur uniquement)
  * Supprime un salon existant par son ID ou nom avec exigence de confirmation explicite.
  */
 /**
- * Outil 7 : searchChannelsTool (Recherche autonome des salons)
- * Permet à l'IA de trouver elle-même les IDs des salons par mots-clés sans demander d'ID.
+ * Outil 7 : searchChannelsTool (Recherche autonome des salons et catégories)
+ * Permet à l'IA de trouver elle-même les IDs des salons et catégories sans demander d'ID.
  */
 export function createSearchChannelsTool(discordContext = {}) {
   return tool(
     async ({ query = '' }) => {
-      logger.info(`[TOOL:searchChannels] Recherche de salons avec le terme : "${query}"`);
+      logger.info(`[TOOL:searchChannels] Recherche de salons ou catégories avec le terme : "${query}"`);
       const { guild } = discordContext;
       if (!guild || !guild.channels?.cache) {
         return JSON.stringify([{ id: 'fake-chan-id', name: query || 'support', type: 'text' }]);
       }
 
-      const q = String(query).toLowerCase().trim();
+      const q = String(query || '').toLowerCase().trim();
       const rawChannels = typeof guild.channels.cache.values === 'function'
         ? Array.from(guild.channels.cache.values())
         : (guild.channelsMap ? Array.from(guild.channelsMap.values()) : Object.values(guild.channels.cache));
 
       const matched = rawChannels
         .filter(c => {
+          if (!c) return false;
           if (!q) return true;
-          return c.name?.toLowerCase().includes(q) || c.id === q;
+          return (c.name && c.name.toLowerCase().includes(q)) || c.id === q;
         })
         .slice(0, 15)
-        .map(c => ({
-          id: c.id,
-          name: c.name,
-          type: typeof c.isTextBased === 'function' && c.isTextBased() ? 'text' : (typeof c.isVoiceBased === 'function' && c.isVoiceBased() ? 'voice' : 'category')
-        }));
+        .map(c => {
+          const isCategory = c.type === ChannelType.GuildCategory ||
+                             c.type === 4 ||
+                             c.type === 'category' ||
+                             (typeof c.isTextBased === 'function' && !c.isTextBased() && typeof c.isVoiceBased === 'function' && !c.isVoiceBased() && Boolean(c.children || rawChannels.some(other => other && other.parentId === c.id)));
+
+          if (isCategory) {
+            let childList = [];
+            if (c.children?.cache) {
+              const childCache = typeof c.children.cache.values === 'function'
+                ? Array.from(c.children.cache.values())
+                : Object.values(c.children.cache);
+              childList = childCache;
+            } else if (Array.isArray(c.children)) {
+              childList = c.children;
+            } else {
+              childList = rawChannels.filter(ch => ch && ch.parentId === c.id && ch.id !== c.id);
+            }
+
+            const childrenSummary = childList.map(child => ({
+              id: child.id,
+              name: child.name,
+              type: typeof child.isTextBased === 'function' && child.isTextBased()
+                ? 'text'
+                : (typeof child.isVoiceBased === 'function' && child.isVoiceBased() ? 'voice' : 'channel')
+            }));
+
+            const childrenIds = childrenSummary.map(ch => ch.id);
+
+            return {
+              id: c.id,
+              name: c.name,
+              type: 'category',
+              childrenIds,
+              children: childrenSummary
+            };
+          }
+
+          const type = typeof c.isTextBased === 'function' && c.isTextBased()
+            ? 'text'
+            : (typeof c.isVoiceBased === 'function' && c.isVoiceBased() ? 'voice' : (c.type === 'voice' ? 'voice' : 'text'));
+
+          const item = {
+            id: c.id,
+            name: c.name,
+            type
+          };
+
+          if (c.parentId) {
+            item.parentId = c.parentId;
+          }
+
+          return item;
+        });
 
       return JSON.stringify(matched);
     },
     {
       name: 'search_channels',
-      description: 'Recherche des salons sur le serveur par mots-clés ou nom (ex: "support", "mooxy-world"). Renvoie une liste au format [{ id, name, type }]. Utilise cet outil pour trouver les IDs des salons toi-même.',
+      description: 'Recherche des salons ou catégories par nom. Retourne toujours un tableau JSON clair avec les ID. Si c\'est une catégorie, retourne aussi les salons inclus.',
       schema: z.object({
-        query: z.string().nullable().optional().describe('Mot-clé ou nom du salon recherché (ex: "support", "mooxy-world")')
+        query: z.string().nullable().optional().describe('Mot-clé ou nom du salon ou de la catégorie recherché(e)')
       })
     }
   );
@@ -289,17 +311,37 @@ export function createStageChannelDeletionTool(discordContext = {}) {
       logger.info(`[TOOL:stageChannelDeletion] Mise en attente de suppression pour les salons :`, channelIds);
       const { guild } = discordContext;
 
-      const ids = Array.isArray(channelIds) ? channelIds : [channelIds];
+      // Bouclier Anti-Boucle : vérification stricte du format des IDs
+      if (!channelIds) {
+        return "Erreur : Fournis un tableau d'ID valide (ex: [\"123456789\", \"987654321\"]).";
+      }
+
+      let ids = [];
+      if (Array.isArray(channelIds)) {
+        ids = channelIds
+          .map(id => (typeof id === 'string' ? id.trim() : (typeof id === 'number' ? String(id) : (id?.id ? String(id.id) : ''))))
+          .filter(Boolean);
+      } else if (typeof channelIds === 'string' && channelIds.trim()) {
+        ids = [channelIds.trim()];
+      } else if (typeof channelIds === 'object' && channelIds?.id) {
+        ids = [String(channelIds.id).trim()];
+      }
+
+      if (ids.length === 0) {
+        return "Erreur : Fournis un tableau d'ID valide (ex: [\"123456789\", \"987654321\"]).";
+      }
+
       const resolvedChannels = [];
 
       for (const rawId of ids) {
         const cleanId = String(rawId).replace(/[<#>]/g, '').trim();
+        if (!cleanId) continue;
         let name = cleanId;
         let finalId = cleanId;
 
         if (guild?.channels?.cache) {
           const chan = guild.channels.cache.get(cleanId) ||
-                       guild.channels.cache.find(c => c.name.toLowerCase() === cleanId.toLowerCase()) ||
+                       guild.channels.cache.find(c => c && c.name && c.name.toLowerCase() === cleanId.toLowerCase()) ||
                        await guild.channels.fetch(cleanId).catch(() => null);
           if (chan) {
             name = chan.name;
@@ -310,7 +352,7 @@ export function createStageChannelDeletionTool(discordContext = {}) {
       }
 
       if (resolvedChannels.length === 0) {
-        return "Aucun salon valide trouvé à mettre en attente.";
+        return "Erreur : Aucun salon valide trouvé à mettre en attente.";
       }
 
       // Génération du ticket d'action
@@ -330,7 +372,7 @@ export function createStageChannelDeletionTool(discordContext = {}) {
       name: 'stage_channel_deletion',
       description: 'Met en attente la suppression de salons Discord identifiés par leurs IDs et génère un ticket d\'action pour validation humaine via boutons Discord.',
       schema: z.object({
-        channelIds: z.array(z.string()).describe('Tableau des IDs des salons à supprimer (obtenus via search_channels)'),
+        channelIds: z.union([z.array(z.string()), z.string()]).nullable().optional().describe('Tableau des IDs des salons à supprimer (obtenus via search_channels)'),
         reason: z.string().nullable().optional().describe('Raison de la suppression')
       })
     }
@@ -392,7 +434,6 @@ export function createDeleteChannelTool(discordContext = {}) {
 // Outils statiques par défaut
 export const timeoutUserTool = createTimeoutUserTool();
 export const deleteMessageTool = createDeleteMessageTool();
-export const createChannelTool = createCreateChannelTool();
 export const deleteChannelTool = createDeleteChannelTool();
 export const searchChannelsTool = createSearchChannelsTool();
 export const stageChannelDeletionTool = createStageChannelDeletionTool();
@@ -429,7 +470,10 @@ export function getToolsForRole(role = 'member', discordContext = {}) {
       createCreateChannelTool(discordContext),
       createSearchChannelsTool(discordContext),
       createStageChannelDeletionTool(discordContext),
-      createDeleteChannelTool(discordContext)
+      createDeleteChannelTool(discordContext),
+      createSearchEntitiesTool(discordContext),
+      createStageDeleteTool(discordContext),
+      createStageRenameTool(discordContext)
     ];
   }
 

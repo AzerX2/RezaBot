@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { PermissionFlagsBits } from 'discord.js';
+import { PermissionFlagsBits, ChannelType } from 'discord.js';
+import { AgentExecutor } from 'langchain/agents';
 import { createSearchChannelsTool, createStageChannelDeletionTool } from '../src/tools/index.js';
 import { actionTicketManager } from '../src/services/actionTicketManager.js';
 import { aiService } from '../src/services/aiService.js';
@@ -13,7 +14,7 @@ describe('Suite de tests : Prompts 10 & 11 (Mémoire Conversationnelle & Agentic
   let mockChannel;
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
     mockClient = new MockClient();
     mockGuild = new MockGuild({ id: 'guild-mega', name: 'Serveur Mega Test' });
     mockChannel = new MockChannel({ id: 'chan-general', name: 'general' });
@@ -88,6 +89,8 @@ describe('Suite de tests : Prompts 10 & 11 (Mémoire Conversationnelle & Agentic
       const passedHistory = askConciergeSpy.mock.calls[0][5];
       expect(passedHistory).toBeDefined();
       expect(passedHistory[0].content).toContain('Alice café, Bob thé.');
+      askConciergeSpy.mockRestore();
+      compressSpy.mockRestore();
     });
   });
 
@@ -113,6 +116,41 @@ describe('Suite de tests : Prompts 10 & 11 (Mémoire Conversationnelle & Agentic
       });
     });
 
+    it('searchChannelsTool doit avoir la description précise pour le LLM', () => {
+      const tool = createSearchChannelsTool();
+      expect(tool.description).toBe("Recherche des salons ou catégories par nom. Retourne toujours un tableau JSON clair avec les ID. Si c'est une catégorie, retourne aussi les salons inclus.");
+    });
+
+    it('searchChannelsTool doit prendre en charge ChannelType.GuildCategory et retourner les salons enfants', async () => {
+      const catGaming = {
+        id: 'cat-gaming-01',
+        name: 'Gaming Zone',
+        type: ChannelType.GuildCategory,
+        isTextBased: () => false,
+        isVoiceBased: () => false
+      };
+      const chanLol = new MockChannel({ id: 'chan-lol-1', name: 'league-of-legends' });
+      chanLol.parentId = 'cat-gaming-01';
+      const chanVal = new MockChannel({ id: 'chan-val-2', name: 'valorant' });
+      chanVal.parentId = 'cat-gaming-01';
+
+      mockGuild.addChannel(catGaming);
+      mockGuild.addChannel(chanLol);
+      mockGuild.addChannel(chanVal);
+
+      const tool = createSearchChannelsTool({ guild: mockGuild });
+      const rawResult = await tool.invoke({ query: 'gaming' });
+      const results = JSON.parse(rawResult);
+
+      expect(results).toHaveLength(1);
+      expect(results[0].id).toBe('cat-gaming-01');
+      expect(results[0].type).toBe('category');
+      expect(results[0].childrenIds).toEqual(['chan-lol-1', 'chan-val-2']);
+      expect(results[0].children).toHaveLength(2);
+      expect(results[0].children[0].name).toBe('league-of-legends');
+      expect(results[0].children[1].name).toBe('valorant');
+    });
+
     it('stageChannelDeletionTool doit créer un ticket et retourner la phrase de mise en attente', async () => {
       const chanSupport = new MockChannel({ id: 'chan-supp-123', name: 'support' });
       const chanMooxy = new MockChannel({ id: 'chan-mooxy-456', name: 'mooxy-world' });
@@ -135,6 +173,35 @@ describe('Suite de tests : Prompts 10 & 11 (Mémoire Conversationnelle & Agentic
       const ticketInManager = actionTicketManager.getTicket(discordContext.pendingAction.id);
       expect(ticketInManager).toBeDefined();
       expect(ticketInManager.channels[0].name).toBe('support');
+    });
+
+    it('stageChannelDeletionTool doit renvoyer une erreur explicite si le format est invalide (Bouclier Anti-Boucle)', async () => {
+      const tool = createStageChannelDeletionTool({ guild: mockGuild });
+
+      const resEmpty = await tool.invoke({ channelIds: [] });
+      expect(resEmpty).toBe("Erreur : Fournis un tableau d'ID valide (ex: [\"123456789\", \"987654321\"]).");
+
+      const resNull = await tool.invoke({ channelIds: null });
+      expect(resNull).toBe("Erreur : Fournis un tableau d'ID valide (ex: [\"123456789\", \"987654321\"]).");
+
+      const resBlank = await tool.invoke({ channelIds: ['   ', ''] });
+      expect(resBlank).toBe("Erreur : Fournis un tableau d'ID valide (ex: [\"123456789\", \"987654321\"]).");
+    });
+
+    it('askConcierge doit intercepter l\'erreur max iterations et renvoyer la réponse fluide sans crasher', async () => {
+      vi.spyOn(AgentExecutor.prototype, 'invoke').mockRejectedValue(
+        new Error('Agent stopped due to max iterations.')
+      );
+
+      const answer = await aiService.askConcierge(
+        'Supprime les catégories obsolètes',
+        'AdminBob',
+        [],
+        { guildId: 'guild-mega', bot_role: 'admin', serverVibe: 'friendly' },
+        { guild: mockGuild, channel: mockChannel }
+      );
+
+      expect(answer).toBe("Désolé, je me suis un peu emmêlé les pinceaux en cherchant les salons. Tu peux me redonner le nom exact ou le faire manuellement pour cette fois ?");
     });
 
     it('messageCreate doit afficher l\'EmbedBuilder et les boutons Confirmer/Annuler si une action est mise en attente', async () => {
