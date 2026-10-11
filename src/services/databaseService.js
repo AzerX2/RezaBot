@@ -129,6 +129,21 @@ class DatabaseService {
     try {
       this.db.exec('CREATE INDEX IF NOT EXISTS idx_daily_summaries_guild_date ON daily_summaries (guildId, date)');
     } catch {}
+
+    // Table des tickets d'actions agentiques en attente de validation humaine
+    const createTicketsTableQuery = `
+      CREATE TABLE IF NOT EXISTS action_tickets (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        data TEXT NOT NULL,
+        guildId TEXT,
+        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+    this.db.exec(createTicketsTableQuery);
+    try {
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_action_tickets_guild ON action_tickets (guildId)');
+    } catch {}
   }
 
   /**
@@ -465,6 +480,67 @@ class DatabaseService {
     } catch (err) {
       logger.error(`[DATABASE] Erreur récupération récents résumés pour guild ${guildId} :`, err);
       return [];
+    }
+  }
+
+  /**
+   * Sauvegarde un ticket d'action en base de données
+   * @param {Object} ticket
+   */
+  saveActionTicket(ticket) {
+    if (!this.db || !ticket?.id) return;
+    try {
+      const stmt = this.db.prepare(`
+        INSERT INTO action_tickets (id, type, data, guildId, createdAt)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO UPDATE SET
+          type = excluded.type,
+          data = excluded.data,
+          guildId = excluded.guildId
+      `);
+      stmt.run(
+        String(ticket.id),
+        ticket.type || 'unknown',
+        JSON.stringify(ticket),
+        ticket.guildId ? String(ticket.guildId) : null
+      );
+    } catch (err) {
+      logger.error(`[DATABASE] Erreur sauvegarde ticket ${ticket.id} :`, err);
+    }
+  }
+
+  /**
+   * Récupère un ticket d'action par son identifiant
+   * @param {string} ticketId
+   * @returns {Object|null}
+   */
+  getActionTicket(ticketId) {
+    if (!this.db || !ticketId) return null;
+    try {
+      const stmt = this.db.prepare('SELECT * FROM action_tickets WHERE id = ?');
+      const row = stmt.get ? stmt.get(String(ticketId)) : null;
+      if (!row) return null;
+      return JSON.parse(row.data);
+    } catch (err) {
+      logger.error(`[DATABASE] Erreur lecture ticket ${ticketId} :`, err);
+      return null;
+    }
+  }
+
+  /**
+   * Supprime un ticket d'action après exécution ou annulation
+   * @param {string} ticketId
+   * @returns {boolean}
+   */
+  deleteActionTicket(ticketId) {
+    if (!this.db || !ticketId) return false;
+    try {
+      const stmt = this.db.prepare('DELETE FROM action_tickets WHERE id = ?');
+      stmt.run(String(ticketId));
+      return true;
+    } catch (err) {
+      logger.error(`[DATABASE] Erreur suppression ticket ${ticketId} :`, err);
+      return false;
     }
   }
 }

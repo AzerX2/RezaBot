@@ -7,6 +7,7 @@ import { createSearchEntitiesTool, searchEntitiesTool } from './discord/searchEn
 import { createCreateChannelTool, createChannelTool } from './discord/createChannel.js';
 import { createStageDeleteTool, stageDeleteTool } from './discord/stageDelete.js';
 import { createStageRenameTool, stageRenameTool } from './discord/stageRename.js';
+import { createStageCategoryCreationTool, stageCategoryCreationTool } from './discord/stageCategoryCreation.js';
 
 export {
   createSearchEntitiesTool,
@@ -16,7 +17,9 @@ export {
   createStageDeleteTool,
   stageDeleteTool,
   createStageRenameTool,
-  stageRenameTool
+  stageRenameTool,
+  createStageCategoryCreationTool,
+  stageCategoryCreationTool
 };
 
 /**
@@ -473,7 +476,8 @@ export function getToolsForRole(role = 'member', discordContext = {}) {
       createDeleteChannelTool(discordContext),
       createSearchEntitiesTool(discordContext),
       createStageDeleteTool(discordContext),
-      createStageRenameTool(discordContext)
+      createStageRenameTool(discordContext),
+      createStageCategoryCreationTool(discordContext)
     ];
   }
 

@@ -9,11 +9,16 @@ import {
   stageDeleteTool,
   createStageRenameTool,
   stageRenameTool,
+  createStageCategoryCreationTool,
+  stageCategoryCreationTool,
   getToolsForRole
 } from '../src/tools/index.js';
 import { actionTicketManager } from '../src/services/actionTicketManager.js';
+import { databaseService } from '../src/services/databaseService.js';
 import { aiService } from '../src/services/aiService.js';
-import { MockGuild, MockChannel } from './mocks/discord.mock.js';
+import messageCreateEvent from '../src/events/messageCreate.js';
+import interactionCreateEvent from '../src/events/interactionCreate.js';
+import { MockGuild, MockChannel, MockMessage, MockUser, MockClient } from './mocks/discord.mock.js';
 
 describe('Suite de tests : Architecture d\'Outils Atomiques (Micro-services)', () => {
   let mockGuild;
@@ -227,8 +232,36 @@ describe('Suite de tests : Architecture d\'Outils Atomiques (Micro-services)', (
     });
   });
 
-  describe('5. Intégration du System Prompt & Méthodologie Obligatoire', () => {
-    it('le prompt système doit contenir la directive stricte en 4 étapes', () => {
+  describe('5. stageCategoryCreation (Préparation création catégorie et salons enfants)', () => {
+    it('doit préparer la création de catégorie, enregistrer le ticket et retourner l\'ID du ticket', async () => {
+      const discordContext = { guild: mockGuild };
+      const categoryTool = createStageCategoryCreationTool(discordContext);
+
+      const res = await categoryTool.invoke({
+        categoryName: 'Pôle Développement',
+        channels: ['annonces-dev', 'code-review', 'chat-tech']
+      });
+
+      expect(res).toContain('Action mise en attente. ID du ticket:');
+      expect(discordContext.pendingAction).toBeDefined();
+      expect(discordContext.pendingAction.type).toBe('create_category');
+      expect(discordContext.pendingAction.categoryName).toBe('Pôle Développement');
+      expect(discordContext.pendingAction.channels).toEqual(['annonces-dev', 'code-review', 'chat-tech']);
+
+      const ticketId = discordContext.pendingAction.id;
+      expect(actionTicketManager.getTicket(ticketId)).toBeDefined();
+    });
+
+    it('doit rejeter un appel sans nom de catégorie', async () => {
+      const categoryTool = createStageCategoryCreationTool({ guild: mockGuild });
+      const res = await categoryTool.invoke({ categoryName: '', channels: ['chan-1'] });
+
+      expect(res).toContain('Erreur : Le nom de la catégorie (categoryName) est obligatoire.');
+    });
+  });
+
+  describe('6. Intégration du System Prompt (Règles strictes 1 & 2)', () => {
+    it('le prompt système doit contenir la directive stricte en 4 étapes et les règles 1 et 2', () => {
       const prompt = aiService.getDynamicConciergePrompt('formal', 'admin');
 
       expect(prompt).toContain('METHODOLOGIE OBLIGATOIRE :');
@@ -236,9 +269,13 @@ describe('Suite de tests : Architecture d\'Outils Atomiques (Micro-services)', (
       expect(prompt).toContain('2. N\'invente jamais d\'ID.');
       expect(prompt).toContain('3. Une fois l\'ID trouvé, utilise l\'outil d\'action approprié.');
       expect(prompt).toContain('4. Si une action nécessite une confirmation, dis à l\'utilisateur que tu as préparé l\'action et qu\'il doit cliquer sur le bouton.');
+
+      // RÈGLE 1 & RÈGLE 2
+      expect(prompt).toContain("RÈGLE 1 : Ne montre JAMAIS d'ID Discord (ex: 883823...) à l'utilisateur. Utilise uniquement les noms des salons (ex: #support).");
+      expect(prompt).toContain("RÈGLE 2 : Si un outil retourne 'Action mise en attente', tu DOIS répondre EXACTEMENT par : '[ACTION_PENDING] J'ai préparé l'action. Clique sur le bouton ci-dessous pour confirmer.' Ne dis JAMAIS que c'est fait.");
     });
 
-    it('getToolsForRole(\'admin\') doit inclure tous les outils atomiques', () => {
+    it('getToolsForRole(\'admin\') doit inclure tous les outils atomiques y compris stage_category_creation', () => {
       const tools = getToolsForRole('admin');
       const names = tools.map(t => t.name);
 
@@ -246,6 +283,111 @@ describe('Suite de tests : Architecture d\'Outils Atomiques (Micro-services)', (
       expect(names).toContain('create_channel');
       expect(names).toContain('stage_delete');
       expect(names).toContain('stage_rename');
+      expect(names).toContain('stage_category_creation');
+    });
+  });
+
+  describe('7. Interception UI dans messageCreate.js ([ACTION_PENDING] & Boutons)', () => {
+    it('doit intercepter [ACTION_PENDING], nettoyer la chaîne et attacher les boutons Confirmer/Annuler', async () => {
+      const mockClient = new MockClient();
+      const mockChannel = new MockChannel({ id: 'c-test-msg', name: 'general' });
+      const user = new MockUser({ id: 'u-admin', username: 'BossAdmin' });
+
+      const msg = new MockMessage({
+        id: 'msg-action-pending',
+        content: 'Reza crée la catégorie Projets avec dev et test',
+        author: user,
+        channel: mockChannel,
+        guild: mockGuild,
+        client: mockClient
+      });
+
+      vi.spyOn(aiService, 'askConcierge').mockImplementation(async (q, a, c, g, discordCtx) => {
+        discordCtx.pendingAction = actionTicketManager.createTicket({
+          type: 'create_category',
+          categoryName: 'Projets',
+          channels: ['dev', 'test'],
+          guildId: mockGuild.id
+        });
+        return "[ACTION_PENDING] J'ai préparé l'action. Clique sur le bouton ci-dessous pour confirmer.";
+      });
+
+      await messageCreateEvent.execute(msg);
+
+      expect(msg.reply).toHaveBeenCalledTimes(1);
+      const replyCall = msg.reply.mock.calls[0][0];
+
+      // Vérifie que [ACTION_PENDING] a été nettoyé
+      expect(replyCall.content).not.toContain('[ACTION_PENDING]');
+      expect(replyCall.content).toBe("J'ai préparé l'action. Clique sur le bouton ci-dessous pour confirmer.");
+
+      // Vérifie les boutons
+      expect(replyCall.components).toBeDefined();
+      expect(replyCall.components).toHaveLength(1);
+      const buttons = replyCall.components[0].components;
+      expect(buttons[0].data.label).toBe('Confirmer');
+      expect(buttons[0].data.custom_id).toContain('confirm_action_');
+      expect(buttons[1].data.label).toBe('Annuler');
+      expect(buttons[1].data.custom_id).toContain('cancel_action_');
+    });
+  });
+
+  describe('8. Confirmation native dans interactionCreate.js (Exécution 0 IA)', () => {
+    it('doit créer la catégorie et les salons enfants puis afficher le message de succès', async () => {
+      const ticket = actionTicketManager.createTicket({
+        type: 'create_category',
+        categoryName: 'Espace Gaming',
+        channels: ['general-gaming', 'vocal-discord'],
+        guildId: mockGuild.id
+      });
+
+      const createdCat = { id: 'new-cat-99', name: 'Espace Gaming' };
+      mockGuild.channels.create = vi.fn().mockImplementation(async ({ name, type }) => {
+        if (type === ChannelType.GuildCategory) {
+          return createdCat;
+        }
+        return { id: `chan-${name}`, name };
+      });
+
+      const mockInteraction = {
+        isButton: () => true,
+        customId: `confirm_action_${ticket.id}`,
+        memberPermissions: { has: vi.fn().mockReturnValue(true) },
+        reply: vi.fn().mockResolvedValue(true),
+        update: vi.fn().mockResolvedValue(true),
+        guild: mockGuild,
+        user: { tag: 'Admin#0001' }
+      };
+
+      await interactionCreateEvent.execute(mockInteraction);
+
+      // Vérifie la création de la catégorie
+      expect(mockGuild.channels.create).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'Espace Gaming',
+        type: ChannelType.GuildCategory
+      }));
+
+      // Vérifie la création des 2 salons enfants
+      expect(mockGuild.channels.create).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'general-gaming',
+        type: ChannelType.GuildText,
+        parent: 'new-cat-99'
+      }));
+      expect(mockGuild.channels.create).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'vocal-discord',
+        type: ChannelType.GuildText,
+        parent: 'new-cat-99'
+      }));
+
+      // Vérifie la suppression des boutons et le message de confirmation exact
+      expect(mockInteraction.update).toHaveBeenCalledWith({
+        content: '✅ La catégorie et les salons ont été créés avec succès !',
+        embeds: [],
+        components: []
+      });
+
+      // Le ticket doit être supprimé après exécution
+      expect(actionTicketManager.getTicket(ticket.id)).toBeUndefined();
     });
   });
 });

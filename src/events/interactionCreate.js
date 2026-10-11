@@ -1,6 +1,7 @@
-import { Events, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits } from 'discord.js';
+import { Events, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits, ChannelType } from 'discord.js';
 import { Document } from '@langchain/core/documents';
 import { actionTicketManager } from '../services/actionTicketManager.js';
+import { databaseService } from '../services/databaseService.js';
 import { logger } from '../utils/logger.js';
 
 export default {
@@ -76,12 +77,13 @@ async function handleButtonInteraction(interaction) {
       ? customId.replace('confirm_action_', '')
       : customId.replace('cancel_action_', '');
 
-    const ticket = actionTicketManager.getTicket(ticketId);
+    const ticket = actionTicketManager.getTicket(ticketId) || databaseService.getActionTicket(ticketId);
 
     // 1. Bouton Annuler
     if (customId.startsWith('cancel_action_')) {
       if (ticket) {
         actionTicketManager.deleteTicket(ticketId);
+        databaseService.deleteActionTicket(ticketId);
       }
       await interaction.update({
         content: '❌ Action annulée',
@@ -102,8 +104,39 @@ async function handleButtonInteraction(interaction) {
         return;
       }
 
-      // Exécution de l'action selon son type
-      if (ticket.type === 'delete_channels') {
+      // Exécution de l'action selon son type en JavaScript natif (zéro IA)
+      if (ticket.type === 'create_category') {
+        if (interaction.guild?.channels?.create) {
+          try {
+            const categoryName = ticket.categoryName || 'Nouvelle Catégorie';
+            const childChannels = ticket.channels || [];
+
+            // Crée la catégorie via l'API Discord
+            const createdCategory = await interaction.guild.channels.create({
+              name: categoryName,
+              type: ChannelType.GuildCategory,
+              reason: ticket.reason || 'Création de catégorie confirmée par administrateur'
+            });
+
+            // Boucle pour créer les salons enfants dedans
+            if (Array.isArray(childChannels)) {
+              for (const chanName of childChannels) {
+                const cleanChanName = String(chanName).trim().toLowerCase().replace(/[\s_]+/g, '-').replace(/[^a-z0-9-]/g, '');
+                await interaction.guild.channels.create({
+                  name: cleanChanName || chanName,
+                  type: ChannelType.GuildText,
+                  parent: createdCategory.id,
+                  reason: `Création du salon enfant pour la catégorie ${categoryName}`
+                });
+              }
+            }
+
+            logger.info(`[AGENTIC-ACTION] Catégorie "${categoryName}" et ses salons créés avec succès sur ${interaction.guild.name}.`);
+          } catch (createErr) {
+            logger.error('[AGENTIC-ACTION] Erreur lors de la création de la catégorie et salons :', createErr);
+          }
+        }
+      } else if (ticket.type === 'delete_channels') {
         if (ticket.channels && Array.isArray(ticket.channels) && interaction.guild) {
           for (const chanInfo of ticket.channels) {
             try {
@@ -139,9 +172,14 @@ async function handleButtonInteraction(interaction) {
       }
 
       actionTicketManager.deleteTicket(ticketId);
+      databaseService.deleteActionTicket(ticketId);
+
+      const finalContent = ticket.type === 'create_category'
+        ? '✅ La catégorie et les salons ont été créés avec succès !'
+        : '✅ Fait !';
 
       await interaction.update({
-        content: '✅ Fait !',
+        content: finalContent,
         embeds: [],
         components: []
       });

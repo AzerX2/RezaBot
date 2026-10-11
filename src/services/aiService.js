@@ -141,8 +141,10 @@ Tu es garant de la paix. Tu as la capacité d'utiliser les outils de modération
         break;
       case 'admin':
         roleSection = `\n\n[STATUT DU BOT : ADMINISTRATEUR]
-Tu es le gérant complet du serveur. En plus de la modération, tu possèdes les outils atomiques de gestion Discord (searchEntities, createChannel, stageDelete, stageRename, create_channel, stage_channel_deletion, search_channels).
-METHODOLOGIE OBLIGATOIRE : 1. Si l'utilisateur demande une action sur un élément existant, utilise TOUJOURS searchEntities en premier pour trouver l'ID. 2. N'invente jamais d'ID. 3. Une fois l'ID trouvé, utilise l'outil d'action approprié. 4. Si une action nécessite une confirmation, dis à l'utilisateur que tu as préparé l'action et qu'il doit cliquer sur le bouton.`;
+Tu es le gérant complet du serveur. En plus de la modération, tu possèdes les outils atomiques de gestion Discord (searchEntities, createChannel, stageDelete, stageRename, stageCategoryCreation, create_channel, stage_channel_deletion, search_channels).
+METHODOLOGIE OBLIGATOIRE : 1. Si l'utilisateur demande une action sur un élément existant, utilise TOUJOURS searchEntities en premier pour trouver l'ID. 2. N'invente jamais d'ID. 3. Une fois l'ID trouvé, utilise l'outil d'action approprié. 4. Si une action nécessite une confirmation, dis à l'utilisateur que tu as préparé l'action et qu'il doit cliquer sur le bouton.
+RÈGLE 1 : Ne montre JAMAIS d'ID Discord (ex: 883823...) à l'utilisateur. Utilise uniquement les noms des salons (ex: #support).
+RÈGLE 2 : Si un outil retourne 'Action mise en attente', tu DOIS répondre EXACTEMENT par : '[ACTION_PENDING] J'ai préparé l'action. Clique sur le bouton ci-dessous pour confirmer.' Ne dis JAMAIS que c'est fait.`;
         break;
       case 'member':
       default:
@@ -162,6 +164,8 @@ Le ton et l'ambiance spécifiques de ce serveur sont : "${serverVibe}".
 Adapte ton langage, ton niveau d'humour et tes tournures de phrases en conséquence afin de t'intégrer parfaitement à cette communauté.${roleSection}${userFactsSection}
 
 Règles de communication :
+- RÈGLE 1 : Ne montre JAMAIS d'ID Discord (ex: 883823...) à l'utilisateur. Utilise uniquement les noms des salons (ex: #support).
+- RÈGLE 2 : Si un outil retourne 'Action mise en attente', tu DOIS répondre EXACTEMENT par : '[ACTION_PENDING] J'ai préparé l'action. Clique sur le bouton ci-dessous pour confirmer.' Ne dis JAMAIS que c'est fait.
 - Sois concis, clair et fidèle au ton du serveur (utilise quelques émojis pertinents, du markdown Discord propre : **gras**, listes à puces, \`code\` si pertinent).
 - Base tes réponses en priorité sur le contexte fourni (FAQ, docs internes du serveur).
 - Si le contexte ne contient pas l'information requise, réponds honnêtement que tu ne possèdes pas encore cette donnée dans la mémoire du serveur, sans inventer de fausses règles.
@@ -221,6 +225,8 @@ Règles de communication :
       const systemMessage = `${dynamicPrompt}${formattedContext}
 Tu as à ta disposition des outils (Function Calling) adaptés à ton rôle de "${botRole}".
 METHODOLOGIE OBLIGATOIRE : 1. Si l'utilisateur demande une action sur un élément existant, utilise TOUJOURS searchEntities en premier pour trouver l'ID. 2. N'invente jamais d'ID. 3. Une fois l'ID trouvé, utilise l'outil d'action approprié. 4. Si une action nécessite une confirmation, dis à l'utilisateur que tu as préparé l'action et qu'il doit cliquer sur le bouton.
+RÈGLE 1 : Ne montre JAMAIS d'ID Discord (ex: 883823...) à l'utilisateur. Utilise uniquement les noms des salons (ex: #support).
+RÈGLE 2 : Si un outil retourne 'Action mise en attente', tu DOIS répondre EXACTEMENT par : '[ACTION_PENDING] J'ai préparé l'action. Clique sur le bouton ci-dessous pour confirmer.' Ne dis JAMAIS que c'est fait.
 Règle : Si le contexte RAG ou tes connaissances suffisent à répondre précisément, réponds directement sans appeler d'outil inutilement.`;
 
       // Formatage de l'historique conversationnel pour LangChain

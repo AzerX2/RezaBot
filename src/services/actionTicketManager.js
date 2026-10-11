@@ -1,5 +1,7 @@
+import { databaseService } from './databaseService.js';
+
 /**
- * Gestionnaire en mémoire des tickets d'action agentiques en attente de validation humaine.
+ * Gestionnaire des tickets d'action agentiques en attente de validation humaine (Mémoire + SQLite).
  */
 class ActionTicketManager {
   constructor() {
@@ -20,6 +22,10 @@ class ActionTicketManager {
     };
     this.tickets.set(ticketId, ticket);
 
+    try {
+      databaseService.saveActionTicket(ticket);
+    } catch {}
+
     // Expiration automatique après 15 minutes pour libérer la mémoire
     setTimeout(() => {
       this.tickets.delete(ticketId);
@@ -34,7 +40,31 @@ class ActionTicketManager {
    * @returns {Object|undefined}
    */
   getTicket(ticketId) {
-    return this.tickets.get(ticketId);
+    if (this.tickets.has(ticketId)) {
+      return this.tickets.get(ticketId);
+    }
+    try {
+      const fromDb = databaseService.getActionTicket(ticketId);
+      if (fromDb) {
+        this.tickets.set(ticketId, fromDb);
+        return fromDb;
+      }
+    } catch {}
+    return undefined;
+  }
+
+  /**
+   * Récupère le dernier ticket d'une guilde
+   * @param {string} guildId
+   * @returns {Object|null}
+   */
+  getLatestTicketForGuild(guildId) {
+    if (!guildId) return null;
+    const all = Array.from(this.tickets.values());
+    for (let i = all.length - 1; i >= 0; i--) {
+      if (all[i].guildId === guildId) return all[i];
+    }
+    return null;
   }
 
   /**
@@ -43,6 +73,9 @@ class ActionTicketManager {
    * @returns {boolean}
    */
   deleteTicket(ticketId) {
+    try {
+      databaseService.deleteActionTicket(ticketId);
+    } catch {}
     return this.tickets.delete(ticketId);
   }
 }

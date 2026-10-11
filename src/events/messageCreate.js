@@ -225,30 +225,19 @@ export default {
         databaseService.trackTokenUsage(guildId, estimatedTokens);
 
         // =====================================================================
-        // PROMPT 11 : AGENTIC WORKFLOW & BOUTONS DE CONFIRMATION (Validation Humaine)
+        // PROMPT 11 & ACTION AGENTIQUE : INTERCEPTION UI & BOUTONS DE CONFIRMATION
         // =====================================================================
-        if (discordContext.pendingAction) {
-          const ticket = discordContext.pendingAction;
-          let description = `⚠️ Action requise : Confirmation nécessaire pour exécuter cette opération. Es-tu sûr ?`;
+        const hasActionPendingTag = typeof answer === 'string' && answer.includes('[ACTION_PENDING]');
+        const hasPendingAction = hasActionPendingTag || Boolean(discordContext.pendingAction);
 
-          if (ticket.type === 'delete_channels') {
-            const channelNames = (ticket.channels || []).map(c => `#${c.name}`).join(', ');
-            description = `⚠️ Action requise : Je m'apprête à supprimer les salons : ${channelNames}. Es-tu sûr ?`;
-          } else if (ticket.type === 'rename_channel') {
-            const oldName = ticket.channelName || ticket.channels?.[0]?.name || ticket.channelId;
-            description = `⚠️ Action requise : Je m'apprête à renommer le salon #${oldName} en "${ticket.newName}". Es-tu sûr ?`;
-          }
+        if (hasPendingAction) {
+          const answerCleaned = typeof answer === 'string'
+            ? answer.replace(/\[ACTION_PENDING\]\s*/g, '').trim()
+            : answer;
 
-          const confirmEmbed = new EmbedBuilder()
-            .setColor(0xED4245)
-            .setTitle('⚠️ Action requise')
-            .setDescription(description)
-            .addFields(
-              { name: 'Motif', value: ticket.reason || 'Action demandée', inline: true },
-              { name: 'Demandé par', value: `<@${message.author.id}>`, inline: true }
-            )
-            .setFooter({ text: 'Validation requise par un administrateur' })
-            .setTimestamp();
+          const ticket = discordContext.pendingAction ||
+                         actionTicketManager.getLatestTicketForGuild(guildId) ||
+                         actionTicketManager.createTicket({ type: 'generic_action', guildId });
 
           const actionRow = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
@@ -263,11 +252,53 @@ export default {
               .setStyle(ButtonStyle.Danger)
           );
 
-          await message.reply({
-            content: answer || undefined,
-            embeds: [confirmEmbed],
+          let confirmEmbed = null;
+          if (ticket.type === 'delete_channels') {
+            const channelNames = (ticket.channels || []).map(c => `#${c.name}`).join(', ');
+            confirmEmbed = new EmbedBuilder()
+              .setColor(0xED4245)
+              .setTitle('⚠️ Action requise')
+              .setDescription(`⚠️ Action requise : Je m'apprête à supprimer les salons : ${channelNames}. Es-tu sûr ?`)
+              .addFields(
+                { name: 'Motif', value: ticket.reason || 'Action demandée', inline: true },
+                { name: 'Demandé par', value: `<@${message.author.id}>`, inline: true }
+              )
+              .setFooter({ text: 'Validation requise par un administrateur' })
+              .setTimestamp();
+          } else if (ticket.type === 'create_category') {
+            const childNames = (ticket.channels || []).map(c => `#${c}`).join(', ');
+            confirmEmbed = new EmbedBuilder()
+              .setColor(0x57F287)
+              .setTitle('📁 Création de catégorie')
+              .setDescription(`Je m'apprête à créer la catégorie **${ticket.categoryName}** avec les salons : ${childNames || 'aucun'}.`)
+              .addFields(
+                { name: 'Demandé par', value: `<@${message.author.id}>`, inline: true }
+              )
+              .setFooter({ text: 'Validation requise par un administrateur' })
+              .setTimestamp();
+          } else if (ticket.type === 'rename_channel') {
+            const oldName = ticket.channelName || ticket.channels?.[0]?.name || ticket.channelId;
+            confirmEmbed = new EmbedBuilder()
+              .setColor(0xFEE75C)
+              .setTitle('✏️ Renommage de salon')
+              .setDescription(`⚠️ Action requise : Je m'apprête à renommer le salon #${oldName} en "${ticket.newName}". Es-tu sûr ?`)
+              .addFields(
+                { name: 'Demandé par', value: `<@${message.author.id}>`, inline: true }
+              )
+              .setFooter({ text: 'Validation requise par un administrateur' })
+              .setTimestamp();
+          }
+
+          const replyPayload = {
+            content: answerCleaned || undefined,
             components: [actionRow]
-          });
+          };
+
+          if (confirmEmbed) {
+            replyPayload.embeds = [confirmEmbed];
+          }
+
+          await message.reply(replyPayload);
           return;
         }
 
