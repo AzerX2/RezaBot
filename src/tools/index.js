@@ -130,7 +130,7 @@ export function createTimeoutUserTool(discordContext = {}) {
       description: 'Exclut temporairement (timeout / sourdine) un membre du serveur Discord pour une durée déterminée avec une raison justifiée.',
       schema: z.object({
         userId: z.string().describe('ID Discord ou mention de l\'utilisateur à mettre en sourdine (ex: "123456789" ou "<@123456789>")'),
-        durationMinutes: z.number().default(10).describe('Durée de l\'exclusion en minutes (ex: 5, 10, 60)'),
+        durationMinutes: z.number().nullable().optional().default(10).describe('Durée de l\'exclusion en minutes (ex: 5, 10, 60)'),
         reason: z.string().nullable().optional().describe('Raison ou motif de la sanction')
       })
     }
@@ -226,8 +226,8 @@ export function createCreateChannelTool(discordContext = {}) {
       description: 'Crée un nouveau salon textuel ou vocal sur le serveur Discord si l\'administrateur le demande explicitement.',
       schema: z.object({
         name: z.string().describe('Nom du nouveau salon (ex: "annonces-projets", "vocal-chill")'),
-        type: z.enum(['text', 'voice']).default('text').describe('Type de salon ("text" pour textuel, "voice" pour vocal)'),
-        reason: z.string().optional().describe('Motif de création')
+        type: z.enum(['text', 'voice']).nullable().optional().default('text').describe('Type de salon ("text" pour textuel, "voice" pour vocal)'),
+        reason: z.string().nullable().optional().describe('Motif de création')
       })
     }
   );
@@ -273,7 +273,7 @@ export function createSearchChannelsTool(discordContext = {}) {
       name: 'search_channels',
       description: 'Recherche des salons sur le serveur par mots-clés ou nom (ex: "support", "mooxy-world"). Renvoie une liste au format [{ id, name, type }]. Utilise cet outil pour trouver les IDs des salons toi-même.',
       schema: z.object({
-        query: z.string().optional().describe('Mot-clé ou nom du salon recherché (ex: "support", "mooxy-world")')
+        query: z.string().nullable().optional().describe('Mot-clé ou nom du salon recherché (ex: "support", "mooxy-world")')
       })
     }
   );
@@ -382,7 +382,7 @@ export function createDeleteChannelTool(discordContext = {}) {
       description: 'Supprime un salon sur le serveur Discord ou le met en attente de confirmation humaine.',
       schema: z.object({
         channelId: z.string().describe('ID, mention (<#id>) ou nom exact du salon à supprimer'),
-        confirmed: z.boolean().default(false).describe('Doit être true UNIQUEMENT si l\'utilisateur a explicitement validé'),
+        confirmed: z.boolean().nullable().optional().default(false).describe('Doit être true UNIQUEMENT si l\'utilisateur a explicitement validé'),
         reason: z.string().nullable().optional().describe('Raison de la suppression')
       })
     }

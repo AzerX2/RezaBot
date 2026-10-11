@@ -100,7 +100,7 @@ Réponds TOUJOURS au format JSON strict avec la structure suivante :
         return await this.client.chat.completions.create({
           model: config.ai.fastModel || 'gpt-5.4-nano', // Modèle Fast (modération en temps réel)
           temperature: 0.1, // Déterministe pour la modération
-          max_tokens: config.ai.maxTokensModeration,
+          max_completion_tokens: config.ai.maxTokensModeration,
           response_format: { type: 'json_object' },
           messages: [
             { role: 'system', content: this.moderationSystemPrompt },
@@ -211,7 +211,10 @@ Règles de communication :
         apiKey: config.ai.openaiApiKey,
         model: config.ai.chatModel || 'gpt-5.4-mini',
         temperature: 0.7,
-        maxTokens: config.ai.maxTokensAgentic
+        maxTokens: -1,
+        modelKwargs: {
+          max_completion_tokens: config.ai.maxTokensAgentic
+        }
       });
 
       // 2. Instructions système de l'agent
@@ -283,7 +286,7 @@ Règle : Si le contexte RAG ou tes connaissances suffisent à répondre précis�
           return await this.client.chat.completions.create({
             model: config.ai.chatModel || 'gpt-5.4-mini',
             temperature: 0.7,
-            max_tokens: config.ai.maxTokensEconomy,
+            max_completion_tokens: config.ai.maxTokensEconomy,
             messages: [
               { role: 'system', content: `${dynamicPrompt}${formattedContext}` },
               ...historyForFallback,
@@ -332,7 +335,7 @@ Règle : Si le contexte RAG ou tes connaissances suffisent à répondre précis�
         return await this.client.chat.completions.create({
           model: config.ai.fastModel || 'gpt-5.4-nano', // Modèle Fast pour l'analyse d'ambiance
           temperature: 0.3,
-          max_tokens: config.ai.maxTokensEconomy,
+          max_completion_tokens: config.ai.maxTokensEconomy,
           response_format: { type: 'json_object' },
           messages: [
             {
@@ -389,7 +392,7 @@ Réponds obligatoirement au format JSON strict :
         return await this.client.chat.completions.create({
           model: config.ai.microModel || config.ai.fastModel || 'gpt-4.1-nano', // Modèle Micro pour la synthèse TL;DR
           temperature: 0.3,
-          max_tokens: config.ai.maxTokensEconomy,
+          max_completion_tokens: config.ai.maxTokensEconomy,
           messages: [
             {
               role: 'system',
@@ -432,7 +435,7 @@ Termine par une phrase courte sur l'ambiance générale du salon.`
         return await this.client.chat.completions.create({
           model: config.ai.fastModel,
           temperature: 0.95, // Température haute pour assurer l'originalité à chaque membre
-          max_tokens: 120,
+          max_completion_tokens: 120,
           messages: [
             {
               role: 'system',
@@ -491,7 +494,7 @@ Directives strictes :
         return await this.client.chat.completions.create({
           model: config.ai.chatModel,
           temperature: 0.85,
-          max_tokens: 220,
+          max_completion_tokens: 220,
           messages: [
             {
               role: 'system',
@@ -546,7 +549,7 @@ RÈGLES CRUCIALES :
         return await this.client.chat.completions.create({
           model: config.ai.fastModel || 'gpt-5.4-nano',
           temperature: 0.8,
-          max_tokens: config.ai.maxTokensEconomy || 250,
+          max_completion_tokens: config.ai.maxTokensEconomy || 250,
           messages: [
             { role: 'system', content: systemPrompt },
             {
@@ -590,7 +593,7 @@ RÈGLES CRUCIALES :
         return await this.client.chat.completions.create({
           model: config.ai.microModel || 'gpt-4.1-nano',
           temperature: 0.2,
-          max_tokens: config.ai.maxTokensCompression || 150,
+          max_completion_tokens: config.ai.maxTokensCompression || 150,
           messages: [
             { role: 'system', content: systemPrompt },
             {

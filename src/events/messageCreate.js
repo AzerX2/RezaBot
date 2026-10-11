@@ -146,16 +146,21 @@ export default {
 
             // Avant d'envoyer l'historique au chatModel, compression via microModel (FinOps)
             if (rawHistory.length > 0) {
-              const compressedSummary = await aiService.compressContext(rawHistory);
-              if (compressedSummary) {
-                conversationHistory = [
-                  {
-                    role: 'user',
-                    content: `[Historique compressé] : ${compressedSummary}`,
-                    name: 'Contexte'
-                  }
-                ];
-              } else {
+              try {
+                const compressedSummary = await aiService.compressContext(rawHistory);
+                if (compressedSummary) {
+                  conversationHistory = [
+                    {
+                      role: 'user',
+                      content: `[Historique compressé] : ${compressedSummary}`,
+                      name: 'Contexte'
+                    }
+                  ];
+                } else {
+                  conversationHistory = rawHistory;
+                }
+              } catch (compressErr) {
+                logger.warn(`[CONCIERGE] Échec compression de l'historique : ${compressErr.message}`);
                 conversationHistory = rawHistory;
               }
             }
@@ -202,7 +207,7 @@ export default {
         };
 
         // Appel Concierge avec cache sémantique, agentique, contexte et mémoire conversationnelle
-        const answer = await aiService.askConcierge(
+        let answer = await aiService.askConcierge(
           cleanQuestion,
           message.member?.displayName || message.author.username,
           ragContext,
@@ -210,6 +215,10 @@ export default {
           discordContext,
           conversationHistory
         );
+
+        if (!answer || typeof answer !== 'string' || !answer.trim()) {
+          answer = "Désolé, je ne peux pas te répondre pour le moment en raison d'une erreur technique. Réessaie dans un instant !";
+        }
 
         // Décompte FinOps des tokens consommés (~1 token pour 3.5 caractères)
         const estimatedTokens = Math.ceil((cleanQuestion.length + (answer?.length || 0)) / 3.5);
@@ -254,14 +263,31 @@ export default {
           return;
         }
 
-        await message.reply({
-          content: answer,
-          allowedMentions: { repliedUser: true }
-        });
+        try {
+          await message.reply({
+            content: answer,
+            allowedMentions: { repliedUser: true }
+          });
+        } catch (replyErr) {
+          logger.warn(`[CONCIERGE] Échec du reply direct (${replyErr.message}), envoi direct dans le salon...`);
+          await message.channel.send({
+            content: `<@${message.author.id}> ${answer}`,
+            allowedMentions: { users: [message.author.id] }
+          }).catch(() => {});
+        }
         return; // Ne pas exécuter la modération standard sur une question directe au bot
       } catch (err) {
         logger.error(`[CONCIERGE] Erreur lors de la réponse au membre ${message.author.tag} sur guild ${guildId} :`, err);
-        await message.reply("Désolé, j'ai eu un trou de mémoire temporaire en traitant ta demande !").catch(() => {});
+        const errorReply = "Désolé, je ne peux pas te répondre pour le moment en raison d'une erreur technique. Réessaie dans un instant !";
+        await message.reply({
+          content: errorReply,
+          allowedMentions: { repliedUser: true }
+        }).catch(async () => {
+          await message.channel.send({
+            content: `<@${message.author.id}> ${errorReply}`,
+            allowedMentions: { users: [message.author.id] }
+          }).catch(() => {});
+        });
         return;
       }
     }

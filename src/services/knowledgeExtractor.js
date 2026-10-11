@@ -34,7 +34,7 @@ class KnowledgeExtractor {
       const response = await this.client.chat.completions.create({
         model: config.ai.microModel || 'gpt-4.1-nano', // Modèle Micro pour les tâches ETL
         temperature: 0.2, // Faible température pour favoriser l'exactitude factuelle
-        max_tokens: 800,
+        max_completion_tokens: 800,
         response_format: { type: 'json_object' },
         messages: [
           {
